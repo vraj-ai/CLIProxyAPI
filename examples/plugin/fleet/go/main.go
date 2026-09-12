@@ -474,45 +474,119 @@ func savings(raw []byte) ([]byte, error) {
 	})
 }
 
-// savingsHTML embeds pxpipe's own dashboard and only adds the telemetry
-// pxpipe does not have: subagent context compression and injection counts.
-func savingsHTML(px pxStats, ug ugStats, inj int64) string {
-	var rows strings.Builder
-	keys := make([]string, 0, len(px.ByModel))
-	for k := range px.ByModel {
-		keys = append(keys, k)
+// modelRow is one line of the per-model reduction table.
+type modelRow struct {
+	Model   string
+	Reduced int64
+}
+
+// savingsView is the page data shape: measured pxpipe and subagent-context
+// reductions, the process injection count, and sorted per-model rows.
+type savingsView struct {
+	Px         pxStats
+	Ug         ugStats
+	Injections int64
+	Models     []modelRow
+}
+
+func newSavingsView(px pxStats, ug ugStats, inj int64) savingsView {
+	models := make([]modelRow, 0, len(px.ByModel))
+	for m, n := range px.ByModel {
+		models = append(models, modelRow{Model: m, Reduced: n})
 	}
-	sort.Strings(keys)
-	for _, m := range keys {
-		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, html.EscapeString(m), humanize(px.ByModel[m]))
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Reduced != models[j].Reduced {
+			return models[i].Reduced > models[j].Reduced
+		}
+		return models[i].Model < models[j].Model
+	})
+	return savingsView{Px: px, Ug: ug, Injections: inj, Models: models}
+}
+
+// savingsHTML renders the Fleet dashboard: stat cards for each measured
+// layer, the per-model table, and pxpipe's own dashboard embedded live.
+func savingsHTML(px pxStats, ug ugStats, inj int64) string {
+	v := newSavingsView(px, ug, inj)
+
+	var rows strings.Builder
+	if len(v.Models) == 0 {
+		rows.WriteString(`<tr><td colspan="2" class="empty">no compressed requests recorded</td></tr>`)
+	}
+	for _, m := range v.Models {
+		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, html.EscapeString(m.Model), humanize(m.Reduced))
 	}
 
-	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8">
-<title>Fleet — Savings</title>
+	pxClass := "big"
+	if v.Px.SavedPct < 0 {
+		pxClass = "big warn"
+	}
+	ugClass := "big"
+	if v.Ug.SavedPct < 0 {
+		ugClass = "big warn"
+	}
+
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet — savings</title>
 <style>
-  body { background:#0d1117; color:#e6edf3; font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; }
-  header { padding:16px 24px 0; } h1 { font-size:17px; margin:0 0 2px; }
-  .sub { color:#8b949e; font-size:12px; margin:0 0 12px; } .sub a { color:#58a6ff; }
-  .strip { display:flex; gap:12px; padding:0 24px 16px; flex-wrap:wrap; }
-  .chip { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 16px; font-size:12px; color:#8b949e; }
-  .chip b { display:block; font-size:20px; color:#3fb950; font-weight:700; }
-  iframe { display:block; width:100%%; height:calc(100vh - 150px); border:0; border-top:1px solid #30363d; }
-  table { font-size:12px; border-collapse:collapse; } td { padding:1px 8px 1px 0; }
-  td.num { text-align:right; font-variant-numeric:tabular-nums; color:#3fb950; }
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --muted:#8b949e; --accent:#3fb950; --warn:#d29922; --link:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; }
+  .top { max-width:1100px; margin:0 auto; padding:20px 24px 32px; }
+  header { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; font-weight:600; }
+  nav a { color:var(--link); font-size:13px; margin-left:14px; text-decoration:none; }
+  nav a:hover { text-decoration:underline; }
+  a:focus-visible { outline:2px solid var(--link); outline-offset:2px; }
+  .note { color:var(--muted); font-size:12px; margin:6px 0 0; max-width:72ch; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin:18px 0 12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card h2, .live h2 { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; font-weight:600; }
+  .big { font-size:26px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .big.warn { color:var(--warn); }
+  .meta { font-size:12px; color:var(--muted); margin-top:4px; }
+  table { width:100%%; font-size:13px; border-collapse:collapse; }
+  th { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); text-align:left; padding:0 8px 6px 0; font-weight:600; }
+  td { padding:5px 8px 5px 0; border-top:1px solid var(--line); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td.num { color:var(--accent); }
+  .empty { color:var(--muted); }
+  .live { margin-top:18px; }
+  .live h2 a { color:var(--link); text-transform:none; letter-spacing:0; }
+  iframe { display:block; width:100%%; height:62vh; min-height:420px; border:1px solid var(--line); border-radius:10px; background:#0d1117; }
 </style></head><body>
+<div class="top">
 <header>
   <h1>Fleet — savings</h1>
-  <p class="sub">Historical local telemetry, not attributed to this route. Text/byte reduction is not token or dollar savings. The embedded dashboard requires pxpipe on this browser's localhost. <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe</a> · <a href="?format=json">json</a></p>
+  <nav><a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe ↗</a><a href="?format=json">JSON</a></nav>
 </header>
-<div class="strip">
-  <div class="chip"><b>%.1f%%</b>recorded context bytes reduced · %d events · %s → %s</div>
-  <div class="chip"><b>%d</b>instruction body edits this process. Not model compliance or savings.</div>
-  <div class="chip"><b>text characters reduced by model</b><table>%s</table></div>
+<p class="note">Historical local telemetry, not attributed to this route. Text/byte reduction is not token or dollar savings; image token cost is excluded.</p>
+<div class="grid">
+  <div class="card"><h2>pxpipe compression</h2>
+    <div class="%s">%.1f%%</div>
+    <div class="meta">text chars reduced · %s requests · %s compressed · %s → %s</div>
+  </div>
+  <div class="card"><h2>subagent context</h2>
+    <div class="%s">%.1f%%</div>
+    <div class="meta">context bytes reduced · %d events · %s → %s</div>
+  </div>
+  <div class="card"><h2>instruction injection</h2>
+    <div class="big">%d</div>
+    <div class="meta">caveman + ponytail body edits this process · not model compliance or savings</div>
+  </div>
 </div>
-<iframe src="http://127.0.0.1:47821/"></iframe>
+<div class="card">
+  <h2>text characters reduced by model</h2>
+  <table><tr><th>model</th><th class="num">chars reduced</th></tr>%s</table>
+</div>
+<div class="live">
+  <h2>pxpipe — live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">open in tab ↗</a></h2>
+  <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
+</div>
+</div>
 </body></html>`,
-		ug.SavedPct, ug.Events, humanize(ug.Before), humanize(ug.After),
-		inj,
+		pxClass, v.Px.SavedPct, humanize(v.Px.Requests), humanize(v.Px.Compressed), humanize(v.Px.CharsBefore), humanize(v.Px.CharsAfter),
+		ugClass, v.Ug.SavedPct, v.Ug.Events, humanize(v.Ug.Before), humanize(v.Ug.After),
+		v.Injections,
 		rows.String())
 }
 

@@ -241,15 +241,62 @@ func TestInterceptPrefixExcluded(t *testing.T) {
 
 func TestSavingsHTMLEscapesModel(t *testing.T) {
 	px := pxStats{ByModel: map[string]int64{"<script>alert(1)</script>": 10}}
-	html := savingsHTML(px, ugStats{}, 0)
-	if strings.Contains(html, "<script>alert(1)</script>") {
+	page := savingsHTML(px, ugStats{}, 0)
+	if strings.Contains(page, "<script>alert(1)</script>") {
 		t.Fatal("model name not escaped")
 	}
-	if !strings.Contains(html, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Fatal("escaped model name missing")
 	}
-	if !strings.Contains(html, `<iframe src="http://127.0.0.1:47821/"></iframe>`) {
-		t.Fatal("iframe changed")
+	if !strings.Contains(page, `src="http://127.0.0.1:47821/"`) {
+		t.Fatal("pxpipe iframe missing")
+	}
+	if !strings.Contains(page, `title="pxpipe live dashboard"`) {
+		t.Fatal("iframe title missing")
+	}
+}
+
+func TestSavingsHTMLLayout(t *testing.T) {
+	px := pxStats{
+		Requests: 10, Compressed: 4,
+		CharsBefore: 1000, CharsAfter: 600, SavedPct: 40,
+		ByModel: map[string]int64{"gpt-6-astra": 400},
+	}
+	ug := ugStats{Events: 3, Before: 500, After: 300, SavedPct: 40}
+	page := savingsHTML(px, ug, 7)
+	for _, want := range []string{
+		"pxpipe compression", "subagent context", "instruction injection",
+		"text characters reduced by model", "pxpipe — live dashboard",
+		"not token or dollar savings", "not model compliance",
+		"gpt-6-astra", `?format=json`, `Open pxpipe`,
+		"40.0%", "10 requests", "4 compressed",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page missing %q", want)
+		}
+	}
+}
+
+func TestSavingsHTMLEmptyAndNegative(t *testing.T) {
+	empty := savingsHTML(pxStats{ByModel: map[string]int64{}}, ugStats{}, 0)
+	if !strings.Contains(empty, "no compressed requests recorded") {
+		t.Fatal("empty model table missing placeholder row")
+	}
+	neg := savingsHTML(pxStats{ByModel: map[string]int64{"m": -5}, SavedPct: -5}, ugStats{}, 0)
+	if !strings.Contains(neg, `class="big warn"`) {
+		t.Fatal("negative reduction not marked warn")
+	}
+}
+
+func TestSavingsViewSortsModels(t *testing.T) {
+	v := newSavingsView(pxStats{ByModel: map[string]int64{
+		"b": 100, "a": 100, "z": 5,
+	}}, ugStats{}, 0)
+	if len(v.Models) != 3 {
+		t.Fatalf("models = %v", v.Models)
+	}
+	if v.Models[0].Model != "a" || v.Models[1].Model != "b" || v.Models[2].Model != "z" {
+		t.Fatalf("model order = %v, want reduced-desc then name", v.Models)
 	}
 }
 
@@ -365,6 +412,52 @@ not-json
 	if _, err := runSavingsJSON(t); err == nil {
 		t.Fatal("oversized scanner line did not error")
 	}
+}
+
+func TestInjectPreservesReasoningEffort(t *testing.T) {
+	for _, level := range []string{"low", "medium", "high", "xhigh", "max"} {
+		t.Run(level, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"instructions": "be brief",
+				"input":        []any{map[string]any{"role": "user", "content": "hi"}},
+				"reasoning":    map[string]any{"effort": level},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, changed := inject(testText, "openai-response", body)
+			if !changed {
+				t.Fatal("inject returned unchanged")
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if got := doc["reasoning"].(map[string]any)["effort"]; got != level {
+				t.Fatalf("reasoning.effort = %v, want %v", got, level)
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{
+			"instructions": "be brief",
+			"input":        []any{map[string]any{"role": "user", "content": "hi"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, changed := inject(testText, "openai-response", body)
+		if !changed {
+			t.Fatal("inject returned unchanged")
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(out, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := doc["reasoning"]; exists {
+			t.Fatal("reasoning key appeared")
+		}
+	})
 }
 
 func TestRegistrationModelsFieldIsArray(t *testing.T) {
