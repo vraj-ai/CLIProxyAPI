@@ -47,9 +47,9 @@ import "C"
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -192,23 +192,30 @@ func modelAllowed(model string, prefixes []string) bool {
 // inject prepends text into the request body's system context. The body shape
 // is detected by key presence — the protocol translation layer handles the
 // rest downstream.
-func inject(text string, body []byte) ([]byte, bool) {
+func inject(text, format string, body []byte) ([]byte, bool) {
 	if text == "" || len(body) == 0 {
 		return body, false
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(body, &doc); err != nil {
+	if json.Unmarshal(body, &doc) != nil || doc == nil {
 		return body, false
 	}
-	switch {
-	case doc["messages"] != nil:
-		return injectOpenAI(text, doc)
-	case doc["system"] != nil:
-		return injectAnthropic(text, doc)
-	case doc["instructions"] != nil || doc["input"] != nil:
-		return injectResponses(text, doc)
+	var out []byte
+	var changed bool
+	switch format {
+	case "openai":
+		out, changed = injectOpenAI(text, doc)
+	case "claude":
+		out, changed = injectAnthropic(text, doc)
+	case "openai-response", "codex":
+		out, changed = injectResponses(text, doc)
+	default:
+		return body, false
 	}
-	return body, false
+	if !changed {
+		return body, false
+	}
+	return out, true
 }
 
 func injectOpenAI(text string, doc map[string]any) ([]byte, bool) {
@@ -224,7 +231,7 @@ func injectOpenAI(text string, doc map[string]any) ([]byte, bool) {
 			case []any:
 				first["content"] = append([]any{map[string]any{"type": "text", "text": text}}, c...)
 			default:
-				first["content"] = text
+				return nil, false
 			}
 			return marshalDoc(doc)
 		}
@@ -241,12 +248,18 @@ func injectAnthropic(text string, doc map[string]any) ([]byte, bool) {
 		doc["system"] = append([]any{map[string]any{"type": "text", "text": text}}, s...)
 	case nil:
 		doc["system"] = text
+	default:
+		return nil, false
 	}
 	return marshalDoc(doc)
 }
 
 func injectResponses(text string, doc map[string]any) ([]byte, bool) {
-	if ins, ok := doc["instructions"].(string); ok {
+	if v, exists := doc["instructions"]; exists && v != nil {
+		ins, ok := v.(string)
+		if !ok {
+			return nil, false
+		}
 		doc["instructions"] = text + "\n\n" + ins
 		return marshalDoc(doc)
 	}
@@ -309,7 +322,7 @@ func buildRegistration() pluginRegistration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "caveman", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject caveman compressed-reply instruction into routed requests."},
 				{Name: "ponytail", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject ponytail lazy-solution instruction into routed requests."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeString, Description: "Comma-separated model prefixes to inject; empty means all."},
+				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model prefixes to inject; empty means all."},
 			},
 		},
 		Capabilities: registrationCapability{RequestInterceptor: true, ManagementAPI: true},
@@ -326,7 +339,7 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 	body := req.Body
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
-		if injected, ok := inject(instructionText(cfg), req.Body); ok {
+		if injected, ok := inject(instructionText(cfg), req.SourceFormat, req.Body); ok {
 			body = injected
 			state.mu.Lock()
 			state.injections++
@@ -343,15 +356,17 @@ type pxEvent struct {
 	Method            string `json:"method"`
 	Model             string `json:"model"`
 	Compressed        bool   `json:"compressed"`
-	OrigChars         int64  `json:"orig_chars"`
-	OutgoingTextChars int64  `json:"outgoing_text_chars"`
+	Status            int    `json:"status"`
+	OrigChars         *int64 `json:"orig_chars"`
+	OutgoingTextChars *int64 `json:"outgoing_text_chars"`
 	InputTokens       int64  `json:"input_tokens"`
 	OutputTokens      int64  `json:"output_tokens"`
 }
 
 type ugEvent struct {
-	OriginalBytes int64 `json:"originalBytes"`
-	OutputBytes   int64 `json:"outputBytes"`
+	Source        string `json:"source"`
+	OriginalBytes *int64 `json:"originalBytes"`
+	OutputBytes   *int64 `json:"outputBytes"`
 }
 
 type pxStats struct {
@@ -394,14 +409,20 @@ func savings(raw []byte) ([]byte, error) {
 			px.Requests++
 			px.InputTokens += e.InputTokens
 			px.OutputTokens += e.OutputTokens
-			if e.Compressed {
+			if e.Compressed && e.Status >= 200 && e.Status < 300 && e.OrigChars != nil && e.OutgoingTextChars != nil && *e.OrigChars > 0 && *e.OutgoingTextChars >= 0 {
 				px.Compressed++
-				px.CharsBefore += e.OrigChars
-				px.CharsAfter += e.OutgoingTextChars
-				px.ByModel[e.Model] += e.OrigChars - e.OutgoingTextChars
+				px.CharsBefore += *e.OrigChars
+				px.CharsAfter += *e.OutgoingTextChars
+				px.ByModel[e.Model] += *e.OrigChars - *e.OutgoingTextChars
 			}
 		}
-		f.Close()
+		errScan := sc.Err()
+		errClose := f.Close()
+		if errScan != nil || errClose != nil {
+			return nil, fmt.Errorf("telemetry read failed; measurements unavailable")
+		}
+	} else {
+		return nil, fmt.Errorf("telemetry unavailable; measurements not reported")
 	}
 	if px.CharsBefore > 0 {
 		px.SavedPct = float64(px.CharsBefore-px.CharsAfter) / float64(px.CharsBefore) * 100
@@ -413,14 +434,20 @@ func savings(raw []byte) ([]byte, error) {
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
 		for sc.Scan() {
 			var e ugEvent
-			if json.Unmarshal(sc.Bytes(), &e) != nil {
+			if json.Unmarshal(sc.Bytes(), &e) != nil || e.Source != "compression" || e.OriginalBytes == nil || e.OutputBytes == nil || *e.OriginalBytes <= 0 || *e.OutputBytes < 0 {
 				continue
 			}
 			ug.Events++
-			ug.Before += e.OriginalBytes
-			ug.After += e.OutputBytes
+			ug.Before += *e.OriginalBytes
+			ug.After += *e.OutputBytes
 		}
-		f.Close()
+		errScan := sc.Err()
+		errClose := f.Close()
+		if errScan != nil || errClose != nil {
+			return nil, fmt.Errorf("telemetry read failed; measurements unavailable")
+		}
+	} else {
+		return nil, fmt.Errorf("telemetry unavailable; measurements not reported")
 	}
 	if ug.Before > 0 {
 		ug.SavedPct = float64(ug.Before-ug.After) / float64(ug.Before) * 100
@@ -430,7 +457,7 @@ func savings(raw []byte) ([]byte, error) {
 		"pxpipe":                  px,
 		"subagent_context":        ug,
 		"injections_this_process": inj,
-		"note":                    "caveman and ponytail produce no telemetry; injection counts above prove the instructions are being applied.",
+		"note":                    "Historical local logs, not attributed to this proxy route. Character/byte reductions exclude image token cost and do not measure token or dollar savings. Injection counts record body edits, not model compliance or savings.",
 	}
 	if req.Query.Get("format") == "json" {
 		out, _ := json.Marshal(payload)
@@ -457,7 +484,7 @@ func savingsHTML(px pxStats, ug ugStats, inj int64) string {
 	}
 	sort.Strings(keys)
 	for _, m := range keys {
-		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, m, humanize(px.ByModel[m]))
+		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, html.EscapeString(m), humanize(px.ByModel[m]))
 	}
 
 	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8">
@@ -475,12 +502,12 @@ func savingsHTML(px pxStats, ug ugStats, inj int64) string {
 </style></head><body>
 <header>
   <h1>Fleet — savings</h1>
-  <p class="sub">pxpipe dashboard below · <a href="?format=json">json</a></p>
+  <p class="sub">Historical local telemetry, not attributed to this route. Text/byte reduction is not token or dollar savings. The embedded dashboard requires pxpipe on this browser's localhost. <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe</a> · <a href="?format=json">json</a></p>
 </header>
 <div class="strip">
-  <div class="chip"><b>%.1f%%</b>subagent context saved · %d events · %s → %s</div>
-  <div class="chip"><b>%d</b>caveman+ponytail injections this process (no telemetry — counter is the proof)</div>
-  <div class="chip"><b>by model</b><table>%s</table></div>
+  <div class="chip"><b>%.1f%%</b>recorded context bytes reduced · %d events · %s → %s</div>
+  <div class="chip"><b>%d</b>instruction body edits this process. Not model compliance or savings.</div>
+  <div class="chip"><b>text characters reduced by model</b><table>%s</table></div>
 </div>
 <iframe src="http://127.0.0.1:47821/"></iframe>
 </body></html>`,
@@ -542,6 +569,3 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
 }
-
-var _ = fmt.Sprintf
-var _ = bytes.MinRead
