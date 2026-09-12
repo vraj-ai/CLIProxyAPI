@@ -53,6 +53,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"unsafe"
@@ -353,6 +354,24 @@ type ugEvent struct {
 	OutputBytes   int64 `json:"outputBytes"`
 }
 
+type pxStats struct {
+	Requests     int64            `json:"requests"`
+	Compressed   int64            `json:"compressed"`
+	CharsBefore  int64            `json:"chars_before"`
+	CharsAfter   int64            `json:"chars_after"`
+	SavedPct     float64          `json:"saved_pct"`
+	InputTokens  int64            `json:"input_tokens"`
+	OutputTokens int64            `json:"output_tokens"`
+	ByModel      map[string]int64 `json:"saved_chars_by_model"`
+}
+
+type ugStats struct {
+	Events   int64   `json:"events"`
+	Before   int64   `json:"bytes_before"`
+	After    int64   `json:"bytes_after"`
+	SavedPct float64 `json:"saved_pct"`
+}
+
 func savings(raw []byte) ([]byte, error) {
 	state.mu.Lock()
 	cfg := state.config
@@ -360,18 +379,9 @@ func savings(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 
 	var req pluginapi.ManagementRequest
-	_ = json.Unmarshal(raw, &req) // path/query unused; one resource
+	_ = json.Unmarshal(raw, &req)
 
-	px := struct {
-		Requests     int64            `json:"requests"`
-		Compressed   int64            `json:"compressed"`
-		CharsBefore  int64            `json:"chars_before"`
-		CharsAfter   int64            `json:"chars_after"`
-		SavedPct     float64          `json:"saved_pct"`
-		InputTokens  int64            `json:"input_tokens"`
-		OutputTokens int64            `json:"output_tokens"`
-		ByModel      map[string]int64 `json:"saved_chars_by_model"`
-	}{ByModel: map[string]int64{}}
+	px := pxStats{ByModel: map[string]int64{}}
 
 	if f, err := os.Open(cfg.PxpipeEvents); err == nil {
 		sc := bufio.NewScanner(f)
@@ -397,12 +407,7 @@ func savings(raw []byte) ([]byte, error) {
 		px.SavedPct = float64(px.CharsBefore-px.CharsAfter) / float64(px.CharsBefore) * 100
 	}
 
-	ug := struct {
-		Events   int64   `json:"events"`
-		Before   int64   `json:"bytes_before"`
-		After    int64   `json:"bytes_after"`
-		SavedPct float64 `json:"saved_pct"`
-	}{}
+	ug := ugStats{}
 	if f, err := os.Open(cfg.UsageGain); err == nil {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -421,17 +426,78 @@ func savings(raw []byte) ([]byte, error) {
 		ug.SavedPct = float64(ug.Before-ug.After) / float64(ug.Before) * 100
 	}
 
-	out, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"pxpipe":                  px,
 		"subagent_context":        ug,
 		"injections_this_process": inj,
 		"note":                    "caveman and ponytail produce no telemetry; injection counts above prove the instructions are being applied.",
-	})
+	}
+	if req.Query.Get("format") == "json" {
+		out, _ := json.Marshal(payload)
+		return okEnvelope(pluginapi.ManagementResponse{
+			StatusCode: http.StatusOK,
+			Headers:    http.Header{"content-type": {"application/json"}},
+			Body:       out,
+		})
+	}
 	return okEnvelope(pluginapi.ManagementResponse{
 		StatusCode: http.StatusOK,
-		Headers:    http.Header{"content-type": {"application/json"}},
-		Body:       out,
+		Headers:    http.Header{"content-type": {"text/html; charset=utf-8"}},
+		Body:       []byte(savingsHTML(px, ug, inj)),
 	})
+}
+
+// savingsHTML embeds pxpipe's own dashboard and only adds the telemetry
+// pxpipe does not have: subagent context compression and injection counts.
+func savingsHTML(px pxStats, ug ugStats, inj int64) string {
+	var rows strings.Builder
+	keys := make([]string, 0, len(px.ByModel))
+	for k := range px.ByModel {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, m := range keys {
+		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, m, humanize(px.ByModel[m]))
+	}
+
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8">
+<title>Fleet — Savings</title>
+<style>
+  body { background:#0d1117; color:#e6edf3; font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; }
+  header { padding:16px 24px 0; } h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:#8b949e; font-size:12px; margin:0 0 12px; } .sub a { color:#58a6ff; }
+  .strip { display:flex; gap:12px; padding:0 24px 16px; flex-wrap:wrap; }
+  .chip { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 16px; font-size:12px; color:#8b949e; }
+  .chip b { display:block; font-size:20px; color:#3fb950; font-weight:700; }
+  iframe { display:block; width:100%%; height:calc(100vh - 150px); border:0; border-top:1px solid #30363d; }
+  table { font-size:12px; border-collapse:collapse; } td { padding:1px 8px 1px 0; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; color:#3fb950; }
+</style></head><body>
+<header>
+  <h1>Fleet — savings</h1>
+  <p class="sub">pxpipe dashboard below · <a href="?format=json">json</a></p>
+</header>
+<div class="strip">
+  <div class="chip"><b>%.1f%%</b>subagent context saved · %d events · %s → %s</div>
+  <div class="chip"><b>%d</b>caveman+ponytail injections this process (no telemetry — counter is the proof)</div>
+  <div class="chip"><b>by model</b><table>%s</table></div>
+</div>
+<iframe src="http://127.0.0.1:47821/"></iframe>
+</body></html>`,
+		ug.SavedPct, ug.Events, humanize(ug.Before), humanize(ug.After),
+		inj,
+		rows.String())
+}
+
+func humanize(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // ---------------------------------------------------------------------------
