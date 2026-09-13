@@ -468,15 +468,24 @@ func pxpipeScopeSet(raw []byte) ([]byte, error) {
 	for _, m := range req.Models {
 		want[m] = true
 	}
+	var pushErrs []string
 	for _, m := range before {
 		if !want[m] {
-			pushPxpipeModel(m, false)
+			if err := pushPxpipeModel(m, false); err != nil {
+				pushErrs = append(pushErrs, m)
+			}
 		}
 	}
 	for _, m := range req.Models {
-		pushPxpipeModel(m, true)
+		if err := pushPxpipeModel(m, true); err != nil {
+			pushErrs = append(pushErrs, m)
+		}
 	}
-	return jsonResp(map[string]any{"scope": req.Models, "persisted": true}, http.StatusOK)
+	out := map[string]any{"scope": req.Models, "persisted": true}
+	if len(pushErrs) > 0 {
+		out["live_push_failed"] = pushErrs
+	}
+	return jsonResp(out, http.StatusOK)
 }
 
 // pxpipeScopeToggle flips one model in the scope — the page's per-chip path.
@@ -505,18 +514,28 @@ func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	if err := writePxpipeScope(next); err != nil {
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusInternalServerError)
 	}
-	pushPxpipeModel(req.Model, req.On)
-	return jsonResp(map[string]any{"scope": next, "persisted": true}, http.StatusOK)
+	out := map[string]any{"scope": next, "persisted": true}
+	if err := pushPxpipeModel(req.Model, req.On); err != nil {
+		out["live_push_failed"] = []string{req.Model}
+	}
+	return jsonResp(out, http.StatusOK)
 }
 
-func pushPxpipeModel(model string, on bool) {
+func pushPxpipeModel(model string, on bool) error {
 	body, _ := json.Marshal(map[string]any{"model": model, "on": on})
-	_, _ = hostHTTP(pluginapi.HTTPRequest{
+	resp, err := hostHTTP(pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     pxpipeProxyURL + "/fragments/models",
 		Headers: http.Header{"content-type": []string{"application/json"}},
 		Body:    body,
 	})
+	if err != nil || resp == nil {
+		return fmt.Errorf("pxpipe unreachable")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("pxpipe status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // managementDispatch routes both management (key-gated, full /v0/management

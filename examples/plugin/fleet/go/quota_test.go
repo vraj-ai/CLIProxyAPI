@@ -214,7 +214,7 @@ func TestApprovalScopedToRetry(t *testing.T) {
 	}
 
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-approve": {"retry"}}
+	req.Headers = http.Header{"X-Fleet-Approve": {"retry"}}
 	env = callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if !env.OK {
 		t.Fatalf("approved env = %+v", env)

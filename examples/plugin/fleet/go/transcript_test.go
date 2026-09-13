@@ -127,7 +127,7 @@ func TestUncertainOutcomeNeverReplays(t *testing.T) {
 	}
 	resetRouter(pluginConfig{RouterEnabled: true}, backend)
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-difficulty": {"high"}}
+	req.Headers = http.Header{"X-Fleet-Difficulty": {"high"}}
 	env := callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if env.OK || env.Error == nil || env.Error.Code != "outcome_uncertain" {
 		t.Fatalf("env = %+v", env)

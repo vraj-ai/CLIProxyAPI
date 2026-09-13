@@ -183,9 +183,10 @@
 const MGMT = "/v0/management";
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = localStorage.getItem(LS) || "";
-keyEl.addEventListener("change", () => { localStorage.setItem(LS, keyEl.value); refresh(); });
-keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem(LS, keyEl.value); refresh(); } });
+keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
+keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 function toast(msg, cls) {
   const t = document.getElementById("toast");
@@ -225,7 +226,7 @@ function renderPipe(s) {
   ];
   document.getElementById("pipeline").innerHTML = nodes.map(n => {
     const dot = n[1] === null ? "idle" : (n[1] ? "on" : "off");
-    return '<div class="node"><span class="dot ' + dot + '"></span><b>' + n[0] + '</b><span class="sub2">' + n[2] + '</span></div>';
+    return '<div class="node"><span class="dot ' + dot + '"></span><b>' + esc(n[0]) + '</b><span class="sub2">' + esc(n[2]) + '</span></div>';
   }).join('<span class="seg" aria-hidden="true"></span>');
   document.getElementById("linkline").textContent = "· point harnesses at " + s.link;
 }
@@ -237,13 +238,13 @@ function renderQuota(s) {
     const res = (p.resources || []).map(r => {
       const used = r.used_frac || 0, elapsed = r.paced_frac || 0;
       const behind = r.paced;
-      return '<div class="res"><div class="lbl"><span>' + r.name + '</span><span>' +
+      return '<div class="res"><div class="lbl"><span>' + esc(r.name) + '</span><span>' +
         fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
         ' <span class="badge ' + (behind ? "bad" : "ok") + '">' + (behind ? "behind pace" : "on pace") + '</span></span></div>' +
         '<div class="bar' + (behind ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
         '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
     }).join("");
-    return '<div class="card g"><div class="quota-name">' + p.name + '<span class="plan">' + (p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
+    return '<div class="card g"><div class="quota-name">' + esc(p.name) + '<span class="plan">' + esc(p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
   }).join("");
 }
 
@@ -251,14 +252,14 @@ function renderRouter(s) {
   const r = s.router;
   document.getElementById("routersub").textContent = r.enabled ? (r.eligible ? "next request → " + r.eligible : "enabled · nothing eligible right now") : "disabled";
   const cands = (r.candidates || []).map(c =>
-    '<div class="cand' + (c.ok ? " next" : "") + '"><span class="clabel">' + c.label + ' <span class="muted">' + (c.model || "—") + " · " + (c.effort || "—") + '</span></span>' +
-    '<span class="why' + (c.ok ? "" : " bad") + '">' + (c.ok ? "eligible" : c.reason) + '</span></div>').join("");
+    '<div class="cand' + (c.ok ? " next" : "") + '"><span class="clabel">' + esc(c.label) + ' <span class="muted">' + esc(c.model || "—") + " · " + esc(c.effort || "—") + '</span></span>' +
+    '<span class="why' + (c.ok ? "" : " bad") + '">' + (c.ok ? "eligible" : esc(c.reason)) + '</span></div>').join("");
   document.getElementById("routerbody").innerHTML =
     '<div class="effort-ladder">' + ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(e => '<span class="e">' + e + "</span>").join("") + "</div>" +
     '<div style="margin-top:12px">' + (cands || '<span class="empty">router disabled</span>') + "</div>";
   const dec = (r.decisions || []).slice(-14).reverse().map(d =>
-    '<div class="res" style="margin-top:7px"><div class="lbl"><span class="mono">' + d.correlation_id + '</span><span>' + ago(d.at) + '</span></div>' +
-    '<span class="mono ' + (d.outcome === "served" || d.outcome === "completed" ? "" : "muted") + '">' + d.outcome + (d.agent ? " → " + d.agent : "") + (d.effort ? " · " + d.effort : "") + (d.reason ? ' <span class="badge warn">' + d.reason + "</span>" : "") + (d.sidekick ? ' <span class="badge">sidekick: ' + d.sidekick + "</span>" : "") + '</span></div>').join("");
+    '<div class="res" style="margin-top:7px"><div class="lbl"><span class="mono">' + esc(d.correlation_id) + '</span><span>' + ago(d.at) + '</span></div>' +
+    '<span class="mono ' + (d.outcome === "served" || d.outcome === "completed" ? "" : "muted") + '">' + esc(d.outcome) + (d.agent ? " → " + esc(d.agent) : "") + (d.effort ? " · " + esc(d.effort) : "") + (d.reason ? ' <span class="badge warn">' + esc(d.reason) + "</span>" : "") + (d.sidekick ? ' <span class="badge">sidekick: ' + esc(d.sidekick) + "</span>" : "") + '</span></div>').join("");
   document.getElementById("decisions").innerHTML = dec || '<span class="empty">no router traffic yet</span>';
 }
 
@@ -283,7 +284,7 @@ function renderProviders(s) {
     const label = p.kind === "plugin" ? '<span class="badge">virtual</span>' : (dis ? '<span class="badge bad">off</span>' : '<span class="badge ok">on</span>');
     const sw = '<label class="sw"><input type="checkbox" ' + (dis ? "" : "checked") + ' onchange="providerToggle(' + i + ',this.checked,this)"><span class="tr"></span></label>';
     const detail = p.kind === "oauth" ? maskFile(p.detail || "") : (p.detail || "");
-    return '<tr><td><span class="pname">' + p.name + '</span> <span class="muted mono">' + detail + '</span></td><td class="muted mono">' + p.kind + "</td><td class=\"muted mono\">" + (p.models || []).length + "</td><td>" + label + "</td><td>" + sw + "</td></tr>";
+    return '<tr><td><span class="pname">' + esc(p.name) + '</span> <span class="muted mono">' + esc(detail) + '</span></td><td class="muted mono">' + esc(p.kind) + "</td><td class=\"muted mono\">" + (p.models || []).length + "</td><td>" + label + "</td><td>" + sw + "</td></tr>";
   }).join("");
   window.__providers = s.providers;
 }
@@ -297,7 +298,8 @@ async function providerToggle(i, on, el) {
 async function toggleScope(model, on, el) {
   el.style.opacity = .4;
   try {
-    await api("/fleet/pxpipe/scope/toggle", { method: "POST", body: JSON.stringify({ model: model, on: on }) });
+    const r = await api("/fleet/pxpipe/scope/toggle", { method: "POST", body: JSON.stringify({ model: model, on: on }) });
+    if (r.live_push_failed && r.live_push_failed.length) toast("persisted, but pxpipe live push failed — restart pxpipe or check :47821", "err");
     refresh();
   } catch (e) { toast(e.message, "err"); el.style.opacity = 1; }
 }
@@ -306,10 +308,14 @@ function renderModels(s) {
   const scope = new Set(s.pxpipe.scope || []);
   const list = (s.models || []).filter(m => !q || m.toLowerCase().includes(q));
   document.getElementById("models").innerHTML = list.length
-    ? list.map(m => '<span class="chip' + (scope.has(m) ? " on" : "") + '" title="toggle pxpipe transform" onclick="toggleScope(\'' + m.replace(/'/g, "") + '\',' + !scope.has(m) + ',this)">' + m + "</span>").join("")
+    ? list.map(m => '<span class="chip' + (scope.has(m) ? " on" : "") + '" title="toggle pxpipe transform" data-model="' + esc(m) + '" data-on="' + !scope.has(m) + '">' + esc(m) + "</span>").join("")
     : '<span class="empty">no models served — enable a provider above</span>';
 }
 document.getElementById("mfilter").addEventListener("input", () => window.__state && renderModels(window.__state));
+document.getElementById("models").addEventListener("click", e => {
+  const chip = e.target.closest(".chip[data-model]");
+  if (chip) toggleScope(chip.dataset.model, chip.dataset.on === "true", chip);
+});
 
 async function setFlag(key, val, el) {
   if (el) el.disabled = true;
