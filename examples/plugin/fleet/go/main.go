@@ -7,20 +7,7 @@ package main
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct {
-	void* ptr;
-	size_t len;
-} cliproxy_buffer;
-
-typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
-typedef void (*cliproxy_host_free_fn)(void*, size_t);
-
-typedef struct {
-	uint32_t abi_version;
-	void* host_ctx;
-	cliproxy_host_call_fn call;
-	cliproxy_host_free_fn free_buffer;
-} cliproxy_host_api;
+#include "hostapi.h"
 
 typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
 typedef void (*cliproxy_plugin_free_fn)(void*, size_t);
@@ -37,11 +24,6 @@ extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
 
-static const cliproxy_host_api* stored_host;
-
-static void store_host_api(const cliproxy_host_api* host) {
-	stored_host = host;
-}
 */
 import "C"
 
@@ -56,6 +38,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -70,7 +53,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	if plugin == nil {
 		return 1
 	}
-	C.store_host_api(host)
+	C.fleet_host_store(host)
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -122,6 +105,8 @@ type pluginConfig struct {
 	RouterTimeoutMS int      `yaml:"router_timeout_ms"` // bound on the lead wait
 	RouterReadLines int      `yaml:"router_read_lines"` // read-back window for marker extraction
 	RedactSentinels []string `yaml:"redact_sentinels"`  // literals that must never appear in diagnostics
+	PxpipeEnabled   bool     `yaml:"pxpipe_enabled"`    // route eligible bodies through the pxpipe transform shim
+	PxpipeURL       string   `yaml:"pxpipe_url"`        // pxpipe-transform shim base URL
 }
 
 var state = struct {
@@ -132,6 +117,11 @@ var state = struct {
 	quota      quotaSource
 	decisions  []routeDecision
 	sentinels  []string
+	quotaCache struct {
+		at   time.Time
+		snap map[string]providerQuota
+		err  error
+	}
 }{}
 
 type lifecycleRequest struct {
@@ -161,6 +151,9 @@ func configure(raw []byte) error {
 	}
 	if cfg.UsageGain == "" {
 		cfg.UsageGain = filepath.Join(home, ".pi", "agent", "usage-gain.jsonl")
+	}
+	if cfg.PxpipeURL == "" {
+		cfg.PxpipeURL = "http://127.0.0.1:47822"
 	}
 	state.mu.Lock()
 	state.config = cfg
@@ -322,14 +315,20 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodAuthLoginStart, pluginabi.MethodAuthLoginPoll:
 		return errorEnvelope("unsupported_capability", "fleet-router auth is file-based; no login flow"), nil
 	case "management.register":
-		return okEnvelopeJSON(`{"resources":[{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}]}`)
+		return okEnvelopeJSON(`{"routes":[
+			{"Method":"GET","Path":"/fleet/state"},
+			{"Method":"POST","Path":"/fleet/pxpipe/scope"},
+			{"Method":"POST","Path":"/fleet/pxpipe/scope/toggle"},
+			{"Method":"POST","Path":"/fleet/pxpipe/compression"}
+		],"resources":[
+			{"Path":"/hub","Menu":"Fleet Hub","Description":"Unified control plane — quota pace, cpa router, providers, models, pxpipe scope, and fleet flags."},
+			{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},
+			{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}
+		]}`)
 	case "management.handle":
 		var req pluginapi.ManagementRequest
 		_ = json.Unmarshal(request, &req)
-		if strings.HasSuffix(strings.TrimRight(req.Path, "/"), "/router") {
-			return routerDiagnostics()
-		}
-		return savings(request)
+		return managementDispatch(&req, request)
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
@@ -368,6 +367,8 @@ func buildRegistration() pluginRegistration {
 				{Name: "router_agent", Type: pluginapi.ConfigFieldTypeString, Description: "Herdr agent selector (agent kind or pane id) used as the lead."},
 				{Name: "router_timeout_ms", Type: pluginapi.ConfigFieldTypeInteger, Description: "Bound on the lead wait in milliseconds."},
 				{Name: "router_read_lines", Type: pluginapi.ConfigFieldTypeInteger, Description: "Terminal read-back window for result marker extraction."},
+				{Name: "pxpipe_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Route in-scope request bodies through the pxpipe transform shim so the cliproxyapi link includes pxpipe."},
+				{Name: "pxpipe_url", Type: pluginapi.ConfigFieldTypeString, Description: "pxpipe-transform shim base URL (default http://127.0.0.1:47822)."},
 			},
 		},
 		Capabilities: registrationCapability{
@@ -391,9 +392,9 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Lock()
 	cfg := state.config
 	state.mu.Unlock()
-	body := req.Body
+	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
-		if injected, ok := inject(instructionText(cfg), req.SourceFormat, req.Body); ok {
+		if injected, ok := inject(instructionText(cfg), req.SourceFormat, body); ok {
 			body = injected
 			state.mu.Lock()
 			state.injections++

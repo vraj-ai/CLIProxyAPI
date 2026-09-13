@@ -82,37 +82,9 @@ func selectCandidate(live []herdrAgent, reqEffort string, quota map[string]provi
 			skipped = append(skipped, skipReason{c.Label, "lead_holds_ownership"})
 			continue
 		}
-		if !c.PolicyOK {
-			skipped = append(skipped, skipReason{c.Label, "policy_excluded"})
-			continue
-		}
-		if c.Subscription == "" {
-			skipped = append(skipped, skipReason{c.Label, "subscription_unverified"})
-			continue
-		}
-		if c.Model == "" {
-			skipped = append(skipped, skipReason{c.Label, "model_unverified"})
-			continue
-		}
-		effort := c.Effort
-		if reqEffort != "" {
-			if c.EffortOpaque {
-				skipped = append(skipped, skipReason{c.Label, "effort_unverified"})
-				continue
-			}
-			if !containsString(c.Efforts, reqEffort) {
-				skipped = append(skipped, skipReason{c.Label, "effort_unsupported"})
-				continue
-			}
-			effort = reqEffort
-		}
-		agent, ok := liveAgentFor(live, c.Kind)
-		if !ok {
-			skipped = append(skipped, skipReason{c.Label, "agent_unavailable"})
-			continue
-		}
-		if gate := quotaGate(c.Subscription, quota, now, approved); gate != "" {
-			skipped = append(skipped, skipReason{c.Label, gate})
+		agent, effort, reason := candidateGate(c, live, reqEffort, quota, now, approved)
+		if reason != "" {
+			skipped = append(skipped, skipReason{c.Label, reason})
 			continue
 		}
 		return selection{Chosen: c, Agent: agent, Effort: effort, Skipped: skipped}, nil
@@ -123,6 +95,39 @@ func selectCandidate(live []herdrAgent, reqEffort string, quota map[string]provi
 	}
 	return selection{}, routerErr("no_eligible_candidate",
 		"no preference candidate is eligible — "+strings.Join(reasons, "; "), http.StatusServiceUnavailable)
+}
+
+// candidateGate evaluates one preference candidate: every forwarded fact must
+// be verified, a live agent must exist, and quota must pace. Returns the
+// resolved agent and effort, or the explicit skip reason.
+func candidateGate(c candidate, live []herdrAgent, reqEffort string, quota map[string]providerQuota, now time.Time, approved bool) (herdrAgent, string, string) {
+	if !c.PolicyOK {
+		return herdrAgent{}, "", "policy_excluded"
+	}
+	if c.Subscription == "" {
+		return herdrAgent{}, "", "subscription_unverified"
+	}
+	if c.Model == "" {
+		return herdrAgent{}, "", "model_unverified"
+	}
+	effort := c.Effort
+	if reqEffort != "" {
+		if c.EffortOpaque {
+			return herdrAgent{}, "", "effort_unverified"
+		}
+		if !containsString(c.Efforts, reqEffort) {
+			return herdrAgent{}, "", "effort_unsupported"
+		}
+		effort = reqEffort
+	}
+	agent, ok := liveAgentFor(live, c.Kind)
+	if !ok {
+		return herdrAgent{}, "", "agent_unavailable"
+	}
+	if gate := quotaGate(c.Subscription, quota, now, approved); gate != "" {
+		return herdrAgent{}, "", gate
+	}
+	return agent, effort, ""
 }
 
 func liveAgentFor(live []herdrAgent, kind string) (herdrAgent, bool) {

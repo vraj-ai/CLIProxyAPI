@@ -27,6 +27,7 @@ type quotaResource struct {
 
 // providerQuota is one normalized openusage provider entry.
 type providerQuota struct {
+	Plan      string
 	Stale     bool
 	FetchedAt time.Time
 	ExpiresAt time.Time
@@ -80,7 +81,7 @@ func parseOpenusage(out []byte) (map[string]providerQuota, error) {
 	}
 	snap := make(map[string]providerQuota, len(doc.Providers))
 	for name, p := range doc.Providers {
-		pq := providerQuota{Stale: p.Stale, Resources: map[string]quotaResource{}}
+		pq := providerQuota{Plan: p.Plan, Stale: p.Stale, Resources: map[string]quotaResource{}}
 		pq.FetchedAt, _ = time.Parse(time.RFC3339, p.FetchedAt)
 		pq.ExpiresAt, _ = time.Parse(time.RFC3339, p.ExpiresAt)
 		for rname, r := range p.Resources {
