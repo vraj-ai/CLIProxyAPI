@@ -155,8 +155,15 @@ func (h *cliHerdr) runLead(ctx context.Context, req leadRequest) (leadResult, er
 	if timeoutMS <= 0 {
 		timeoutMS = defaultRouterTimeoutMS
 	}
-	prompt := fmt.Sprintf("[cpa-router %s | effort: %s] Answer as plain text. Wrap the complete final answer between %s%s and %s%s, each marker on its own line.\n\n%s",
-		req.CorrelationID, req.Effort, resultMarkerBegin, req.CorrelationID, resultMarkerEnd, req.CorrelationID, req.Task)
+	roleNote := ""
+	switch req.Role {
+	case roleSidekick:
+		roleNote = " You are a READ-ONLY reviewer: do not modify files, run mutating commands, or change any state."
+	case roleFinalize:
+		roleNote = " You retain ownership: incorporate valid findings, reject invalid ones."
+	}
+	prompt := fmt.Sprintf("[cpa-router %s | role: %s | effort: %s]%s Answer as plain text. Wrap the complete final answer between %s%s and %s%s, each marker on its own line. End the framed answer with a line %sok or %sfailed.\n\n%s",
+		req.CorrelationID, req.Role, req.Effort, roleNote, resultMarkerBegin, req.CorrelationID, resultMarkerEnd, req.CorrelationID, verifyMarker, verifyMarker, req.Task)
 	if perr := h.prompt(ctx, target.PaneID, prompt, timeoutMS); perr != nil {
 		return leadResult{}, perr
 	}
@@ -168,7 +175,8 @@ func (h *cliHerdr) runLead(ctx context.Context, req leadRequest) (leadResult, er
 	if !ok {
 		return leadResult{}, routerErr("lead_result_unverified", "lead output did not contain the correlation markers", http.StatusBadGateway)
 	}
-	return leadResult{Text: answer, Agent: target.PaneID}, nil
+	answer, verification := splitVerification(answer)
+	return leadResult{Text: answer, Agent: target.PaneID, Verification: verification}, nil
 }
 
 var _ leadBackend = (*cliHerdr)(nil)

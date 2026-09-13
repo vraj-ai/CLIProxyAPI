@@ -47,7 +47,8 @@ func routerErr(code, message string, status int) *routerError {
 // only reliable completion boundary.
 type leadRequest struct {
 	CorrelationID string
-	Agent         string
+	Agent         string // resolved herdr pane id
+	Role          string // lead, sidekick, or lead_finalize
 	Task          string
 	Model         string
 	Effort        string
@@ -55,8 +56,9 @@ type leadRequest struct {
 }
 
 type leadResult struct {
-	Text  string
-	Agent string
+	Text         string
+	Agent        string
+	Verification string // "ok", "failed", or "" when unreported
 }
 
 // leadBackend is the seam between the executor and the live orchestrator.
@@ -76,6 +78,8 @@ type routeDecision struct {
 	Reason        string       `json:"reason,omitempty"`
 	Agent         string       `json:"agent,omitempty"`
 	Effort        string       `json:"effort,omitempty"`
+	Escalation    string       `json:"escalation,omitempty"`
+	Sidekick      string       `json:"sidekick,omitempty"`
 	Skipped       []skipReason `json:"skipped,omitempty"`
 }
 
@@ -189,7 +193,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err
 	}
-	sel, err := selectCandidate(live, requestedEffort(req.Payload), quota, nowFunc(), approvalGranted(req))
+	sel, err := selectCandidate(live, requestedEffort(req.Payload), quota, nowFunc(), approvalGranted(req), "")
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err
@@ -197,6 +201,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	res, err := backend.runLead(ctx, leadRequest{
 		CorrelationID: corr,
 		Agent:         sel.Agent.PaneID,
+		Role:          roleLead,
 		Task:          task,
 		Model:         sel.Chosen.Model,
 		Effort:        sel.Effort,
@@ -206,8 +211,70 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err), Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped})
 		return nil, err
 	}
-	recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Skipped: sel.Skipped})
-	return openaiCompletion(corr, res.Text), nil
+	triggers := escalationTriggers(req, res)
+	if len(triggers) == 0 {
+		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Skipped: sel.Skipped})
+		return openaiCompletion(corr, res.Text), nil
+	}
+	return escalate(ctx, backend, req, sel, quota, live, res, task, corr, triggers, time.Duration(timeout)*time.Millisecond)
+}
+
+// escalate adds a read-only sidekick between the lead's draft and its final
+// answer. The sidekick is selected by the same eligibility walk minus the
+// lead's candidate — scrutiny must come from an independent provider — and
+// fails closed when none is eligible. The lead always emits the final text.
+func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest, sel selection, quota map[string]providerQuota, live []herdrAgent, draft leadResult, task, corr string, triggers []string, deadline time.Duration) ([]byte, error) {
+	base := routeDecision{
+		CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model,
+		Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped,
+		Escalation: strings.Join(triggers, ","),
+	}
+	side, err := selectCandidate(live, "", quota, nowFunc(), approvalGranted(req), sel.Chosen.Label)
+	if err != nil {
+		base.Outcome = "failed"
+		base.Reason = "no_eligible_sidekick"
+		recordDecision(base)
+		return nil, routerErr("no_eligible_sidekick",
+			"escalation ("+base.Escalation+") required but no independent candidate is eligible — "+err.Error(),
+			http.StatusServiceUnavailable)
+	}
+	review, err := backend.runLead(ctx, leadRequest{
+		CorrelationID: corr + "-side",
+		Agent:         side.Agent.PaneID,
+		Role:          roleSidekick,
+		Task:          sidekickBrief(task, draft.Text),
+		Model:         side.Chosen.Model,
+		Effort:        side.Effort,
+		Deadline:      deadline,
+	})
+	if err != nil {
+		base.Outcome = "failed"
+		base.Reason = "sidekick_" + errCode(err)
+		base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
+		recordDecision(base)
+		return nil, err
+	}
+	final, err := backend.runLead(ctx, leadRequest{
+		CorrelationID: corr + "-final",
+		Agent:         sel.Agent.PaneID,
+		Role:          roleFinalize,
+		Task:          finalizeBrief(task, draft.Text, review.Text),
+		Model:         sel.Chosen.Model,
+		Effort:        sel.Effort,
+		Deadline:      deadline,
+	})
+	if err != nil {
+		base.Outcome = "failed"
+		base.Reason = errCode(err)
+		base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
+		recordDecision(base)
+		return nil, err
+	}
+	base.Outcome = "escalated_completed"
+	base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
+	base.Skipped = append(base.Skipped, side.Skipped...)
+	recordDecision(base)
+	return openaiCompletion(corr, final.Text), nil
 }
 
 func errCode(err error) string {

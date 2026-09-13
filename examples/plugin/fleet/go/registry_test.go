@@ -11,7 +11,7 @@ import (
 var livePi = []herdrAgent{{Name: "pi", Status: "idle", PaneID: "w1B:p1"}}
 
 func TestSelectFirstEligible(t *testing.T) {
-	sel, err := selectCandidate(livePi, "", healthyQuota(), testNow, false)
+	sel, err := selectCandidate(livePi, "", healthyQuota(), testNow, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestSelectSkipsIneligibleInOrder(t *testing.T) {
 	// Only grok live: astra unavailable, swe unavailable, opus policy-excluded,
 	// grok chosen, muse never reached.
 	live := []herdrAgent{{Name: "grok", Status: "idle", PaneID: "w2:p3"}}
-	sel, err := selectCandidate(live, "", healthyQuota(), testNow, false)
+	sel, err := selectCandidate(live, "", healthyQuota(), testNow, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestSelectSkipsIneligibleInOrder(t *testing.T) {
 func TestClaudeNeverEligible(t *testing.T) {
 	// Even when claude is the only live agent, policy excludes it.
 	live := []herdrAgent{{Name: "claude", Status: "idle", PaneID: "w9:p1"}}
-	_, err := selectCandidate(live, "", healthyQuota(), testNow, false)
+	_, err := selectCandidate(live, "", healthyQuota(), testNow, false, "")
 	if err == nil {
 		t.Fatal("claude-only selection did not fail")
 	}
@@ -67,12 +67,12 @@ func TestClaudeNeverEligible(t *testing.T) {
 
 func TestRequestedEffortFilters(t *testing.T) {
 	// astra verifies low..max; "high" forwards exactly.
-	sel, err := selectCandidate(livePi, "high", healthyQuota(), testNow, false)
+	sel, err := selectCandidate(livePi, "high", healthyQuota(), testNow, false, "")
 	if err != nil || sel.Effort != "high" {
 		t.Fatalf("selection = %+v %v", sel, err)
 	}
 	// "turbo" is unsupported for astra and unverified for opaque candidates.
-	_, err = selectCandidate(livePi, "turbo", healthyQuota(), testNow, false)
+	_, err = selectCandidate(livePi, "turbo", healthyQuota(), testNow, false, "")
 	re, ok := err.(*routerError)
 	if !ok || re.code != "no_eligible_candidate" {
 		t.Fatalf("err = %v", err)
@@ -83,7 +83,7 @@ func TestRequestedEffortFilters(t *testing.T) {
 }
 
 func TestAllIneligibleFailsClearly(t *testing.T) {
-	_, err := selectCandidate(nil, "", healthyQuota(), testNow, false)
+	_, err := selectCandidate(nil, "", healthyQuota(), testNow, false, "")
 	re, ok := err.(*routerError)
 	if !ok || re.code != "no_eligible_candidate" {
 		t.Fatalf("err = %v", err)

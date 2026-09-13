@@ -75,9 +75,13 @@ type selection struct {
 // selectCandidate walks the preference order and returns the first candidate
 // whose every forwarded fact is verified and whose live agent exists.
 // reqEffort is the client-requested effort ("" means none required).
-func selectCandidate(live []herdrAgent, reqEffort string, quota map[string]providerQuota, now time.Time, approved bool) (selection, error) {
+func selectCandidate(live []herdrAgent, reqEffort string, quota map[string]providerQuota, now time.Time, approved bool, exclude string) (selection, error) {
 	var skipped []skipReason
 	for _, c := range preferenceOrder {
+		if c.Label == exclude {
+			skipped = append(skipped, skipReason{c.Label, "lead_holds_ownership"})
+			continue
+		}
 		if !c.PolicyOK {
 			skipped = append(skipped, skipReason{c.Label, "policy_excluded"})
 			continue

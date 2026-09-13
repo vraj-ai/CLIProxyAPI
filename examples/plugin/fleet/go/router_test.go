@@ -21,6 +21,8 @@ type fakeBackend struct {
 	err    error
 	live   []herdrAgent
 	calls  []leadRequest
+	queue  []leadResult // per-turn results; falls back to result
+	errAt  int          // fail only the Nth call (1-based), 0 = all via err
 }
 
 func (f *fakeBackend) agents(_ context.Context) ([]herdrAgent, error) {
@@ -29,8 +31,13 @@ func (f *fakeBackend) agents(_ context.Context) ([]herdrAgent, error) {
 
 func (f *fakeBackend) runLead(_ context.Context, req leadRequest) (leadResult, error) {
 	f.calls = append(f.calls, req)
-	if f.err != nil {
+	if f.err != nil && (f.errAt == 0 || f.errAt == len(f.calls)) {
 		return leadResult{}, f.err
+	}
+	if len(f.queue) > 0 {
+		r := f.queue[0]
+		f.queue = f.queue[1:]
+		return r, nil
 	}
 	return f.result, nil
 }
