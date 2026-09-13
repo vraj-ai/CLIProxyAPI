@@ -121,6 +121,7 @@ type pluginConfig struct {
 	RouterAgent     string   `yaml:"router_agent"`      // herdr agent selector used as lead
 	RouterTimeoutMS int      `yaml:"router_timeout_ms"` // bound on the lead wait
 	RouterReadLines int      `yaml:"router_read_lines"` // read-back window for marker extraction
+	RedactSentinels []string `yaml:"redact_sentinels"`  // literals that must never appear in diagnostics
 }
 
 var state = struct {
@@ -130,6 +131,7 @@ var state = struct {
 	backend    leadBackend
 	quota      quotaSource
 	decisions  []routeDecision
+	sentinels  []string
 }{}
 
 type lifecycleRequest struct {
@@ -162,6 +164,7 @@ func configure(raw []byte) error {
 	}
 	state.mu.Lock()
 	state.config = cfg
+	state.sentinels = cfg.RedactSentinels
 	state.mu.Unlock()
 	return nil
 }
@@ -311,8 +314,13 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodExecutorHTTPRequest:
 		return errorEnvelope("unsupported_capability", "cpa router does not serve raw http requests"), nil
 	case "management.register":
-		return okEnvelopeJSON(`{"resources":[{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."}]}`)
+		return okEnvelopeJSON(`{"resources":[{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}]}`)
 	case "management.handle":
+		var req pluginapi.ManagementRequest
+		_ = json.Unmarshal(request, &req)
+		if strings.HasSuffix(strings.TrimRight(req.Path, "/"), "/router") {
+			return routerDiagnostics()
+		}
 		return savings(request)
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil

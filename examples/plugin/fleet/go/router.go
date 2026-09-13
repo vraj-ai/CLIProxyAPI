@@ -80,6 +80,7 @@ type routeDecision struct {
 	Agent         string       `json:"agent,omitempty"`
 	Effort        string       `json:"effort,omitempty"`
 	Escalation    string       `json:"escalation,omitempty"`
+	Quota         string       `json:"quota_freshness,omitempty"`
 	Sidekick      string       `json:"sidekick,omitempty"`
 	Skipped       []skipReason `json:"skipped,omitempty"`
 }
@@ -115,6 +116,9 @@ func currentBackend() leadBackend {
 }
 
 func recordDecision(d routeDecision) {
+	// Free-text fields are scrubbed before storage so diagnostics can never
+	// leak a secret carried inside an upstream error message.
+	d.Reason = redact(d.Reason)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.decisions = append(state.decisions, d)
@@ -194,6 +198,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err
 	}
+	quotaFresh := quotaFreshness(quota, nowFunc())
 	sel, err := selectCandidate(live, requestedEffort(req.Payload), quota, nowFunc(), approvalGranted(req), "")
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
@@ -214,20 +219,20 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	}
 	triggers := escalationTriggers(req, res)
 	if len(triggers) == 0 {
-		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Skipped: sel.Skipped})
+		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Quota: quotaFresh, Skipped: sel.Skipped})
 		return openaiCompletion(corr, res), nil
 	}
-	return escalate(ctx, backend, req, sel, quota, live, res, task, corr, triggers, time.Duration(timeout)*time.Millisecond)
+	return escalate(ctx, backend, req, sel, quota, quotaFresh, live, res, task, corr, triggers, time.Duration(timeout)*time.Millisecond)
 }
 
 // escalate adds a read-only sidekick between the lead's draft and its final
 // answer. The sidekick is selected by the same eligibility walk minus the
 // lead's candidate — scrutiny must come from an independent provider — and
 // fails closed when none is eligible. The lead always emits the final text.
-func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest, sel selection, quota map[string]providerQuota, live []herdrAgent, draft leadResult, task, corr string, triggers []string, deadline time.Duration) ([]byte, error) {
+func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest, sel selection, quota map[string]providerQuota, quotaFresh string, live []herdrAgent, draft leadResult, task, corr string, triggers []string, deadline time.Duration) ([]byte, error) {
 	base := routeDecision{
 		CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model,
-		Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped,
+		Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped, Quota: quotaFresh,
 		Escalation: strings.Join(triggers, ","),
 	}
 	side, err := selectCandidate(live, "", quota, nowFunc(), approvalGranted(req), sel.Chosen.Label)
