@@ -305,7 +305,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodExecutorExecute:
 		return executorExecute(request)
 	case pluginabi.MethodExecutorExecuteStream:
-		return errorEnvelope("unsupported_capability", "cpa router streaming is not available in this build"), nil
+		return executorExecuteStream(request)
 	case pluginabi.MethodExecutorCountTokens:
 		return errorEnvelope("unsupported_capability", "cpa router does not report token counts"), nil
 	case pluginabi.MethodExecutorHTTPRequest:

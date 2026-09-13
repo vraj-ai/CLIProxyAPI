@@ -184,7 +184,6 @@ func TestExecutorExecuteDisabledRouter(t *testing.T) {
 func TestExecutorUnsupportedCapabilitiesFailExplicitly(t *testing.T) {
 	resetRouter(pluginConfig{RouterEnabled: true, RouterAgent: "pi"}, &fakeBackend{})
 	for _, method := range []string{
-		pluginabi.MethodExecutorExecuteStream,
 		pluginabi.MethodExecutorCountTokens,
 		pluginabi.MethodExecutorHTTPRequest,
 	} {

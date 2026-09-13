@@ -239,6 +239,12 @@ func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest
 			"escalation ("+base.Escalation+") required but no independent candidate is eligible — "+err.Error(),
 			http.StatusServiceUnavailable)
 	}
+	if err := ctx.Err(); err != nil {
+		base.Outcome = "failed"
+		base.Reason = "deadline_exceeded"
+		recordDecision(base)
+		return nil, routerErr("deadline_exceeded", "orchestration deadline reached before sidekick review; abandoned turns cannot continue", http.StatusGatewayTimeout)
+	}
 	review, err := backend.runLead(ctx, leadRequest{
 		CorrelationID: corr + "-side",
 		Agent:         side.Agent.PaneID,
@@ -254,6 +260,13 @@ func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest
 		base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
 		recordDecision(base)
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		base.Outcome = "failed"
+		base.Reason = "deadline_exceeded"
+		base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
+		recordDecision(base)
+		return nil, routerErr("deadline_exceeded", "orchestration deadline reached before lead finalize; abandoned turns cannot continue", http.StatusGatewayTimeout)
 	}
 	final, err := backend.runLead(ctx, leadRequest{
 		CorrelationID: corr + "-final",
