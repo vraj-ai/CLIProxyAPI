@@ -253,16 +253,20 @@ func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
 // still fetch fresh per request.
 func quotaCached() (map[string]providerQuota, error) {
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	if time.Since(state.quotaCache.at) < 15*time.Second {
-		return state.quotaCache.snap, state.quotaCache.err
+		snap, err := state.quotaCache.snap, state.quotaCache.err
+		state.mu.Unlock()
+		return snap, err
 	}
+	state.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	snap, err := state.quota.fetch(ctx)
+	state.mu.Lock()
 	state.quotaCache.at = nowFunc()
 	state.quotaCache.snap = snap
 	state.quotaCache.err = err
+	state.mu.Unlock()
 	return snap, err
 }
 
@@ -370,7 +374,11 @@ func writePxpipeScope(models []string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func pxpipeReachable() bool {
@@ -452,15 +460,15 @@ func pxpipeScopeSet(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return jsonResp(map[string]string{"error": "invalid_body"}, http.StatusBadRequest)
 	}
+	before, _ := pxpipeScope()
 	if err := writePxpipeScope(req.Models); err != nil {
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusInternalServerError)
 	}
-	current, _ := pxpipeScope()
 	want := map[string]bool{}
 	for _, m := range req.Models {
 		want[m] = true
 	}
-	for _, m := range current {
+	for _, m := range before {
 		if !want[m] {
 			pushPxpipeModel(m, false)
 		}
