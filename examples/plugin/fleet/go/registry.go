@@ -143,6 +143,20 @@ func containsString(list []string, want string) bool {
 	return false
 }
 
+// normalizeEffort clamps the extended client ladder onto the verified wire
+// vocabulary: minimal maps to low and ultra to max, matching pi's
+// thinkingLevelMap edge normalization for "cpa router".
+func normalizeEffort(e string) string {
+	switch e {
+	case "minimal":
+		return "low"
+	case "ultra":
+		return "max"
+	default:
+		return e
+	}
+}
+
 // requestedEffort reads the client-requested reasoning effort from the
 // openai payload (reasoning_effort, or a reasoning.effort object).
 func requestedEffort(payload []byte) string {

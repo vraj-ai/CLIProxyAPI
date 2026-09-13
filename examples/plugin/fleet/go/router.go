@@ -199,7 +199,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 		return nil, err
 	}
 	quotaFresh := quotaFreshness(quota, nowFunc())
-	sel, err := selectCandidate(live, requestedEffort(req.Payload), quota, nowFunc(), approvalGranted(req), "")
+	sel, err := selectCandidate(live, normalizeEffort(requestedEffort(req.Payload)), quota, nowFunc(), approvalGranted(req), "")
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err

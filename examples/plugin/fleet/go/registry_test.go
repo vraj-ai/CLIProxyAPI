@@ -129,3 +129,21 @@ func TestExecuteSelectsCandidateEndToEnd(t *testing.T) {
 	}
 	_ = pluginapi.ExecutorRequest{}
 }
+
+func TestNormalizeEffortClampsExtendedLadder(t *testing.T) {
+	for in, want := range map[string]string{
+		"minimal": "low", "ultra": "max", "low": "low", "max": "max", "": "",
+	} {
+		if got := normalizeEffort(in); got != want {
+			t.Fatalf("normalizeEffort(%q) = %q", in, got)
+		}
+	}
+	// A client asking for "ultra" selects on the verified "max" wire value.
+	sel, err := selectCandidate(livePi, normalizeEffort("ultra"), healthyQuota(), testNow, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Effort != "max" || sel.Chosen.Label != "astra low" {
+		t.Fatalf("sel = %+v", sel)
+	}
+}
