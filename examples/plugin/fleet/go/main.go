@@ -112,17 +112,23 @@ func cliproxyPluginShutdown() {}
 // config
 
 type pluginConfig struct {
-	Caveman      bool     `yaml:"caveman"`
-	Ponytail     bool     `yaml:"ponytail"`
-	Models       []string `yaml:"models"`        // model prefixes to inject; empty = all
-	PxpipeEvents string   `yaml:"pxpipe_events"` // events.jsonl path
-	UsageGain    string   `yaml:"usage_gain"`    // pi usage-gain.jsonl path
+	Caveman         bool     `yaml:"caveman"`
+	Ponytail        bool     `yaml:"ponytail"`
+	Models          []string `yaml:"models"`            // model prefixes to inject; empty = all
+	PxpipeEvents    string   `yaml:"pxpipe_events"`     // events.jsonl path
+	UsageGain       string   `yaml:"usage_gain"`        // pi usage-gain.jsonl path
+	RouterEnabled   bool     `yaml:"router_enabled"`    // expose the "cpa router" virtual model
+	RouterAgent     string   `yaml:"router_agent"`      // herdr agent selector used as lead
+	RouterTimeoutMS int      `yaml:"router_timeout_ms"` // bound on the lead wait
+	RouterReadLines int      `yaml:"router_read_lines"` // read-back window for marker extraction
 }
 
 var state = struct {
 	mu         sync.Mutex
 	config     pluginConfig
 	injections int64
+	backend    leadBackend
+	decisions  []routeDecision
 }{}
 
 type lifecycleRequest struct {
@@ -291,6 +297,18 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, err
 		}
 		return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+	case pluginabi.MethodModelRegister:
+		return okEnvelope(modelRegistration())
+	case pluginabi.MethodExecutorIdentifier:
+		return okEnvelopeJSON(`{"identifier":"` + routerProvider + `"}`)
+	case pluginabi.MethodExecutorExecute:
+		return executorExecute(request)
+	case pluginabi.MethodExecutorExecuteStream:
+		return errorEnvelope("unsupported_capability", "cpa router streaming is not available in this build"), nil
+	case pluginabi.MethodExecutorCountTokens:
+		return errorEnvelope("unsupported_capability", "cpa router does not report token counts"), nil
+	case pluginabi.MethodExecutorHTTPRequest:
+		return errorEnvelope("unsupported_capability", "cpa router does not serve raw http requests"), nil
 	case "management.register":
 		return okEnvelopeJSON(`{"resources":[{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."}]}`)
 	case "management.handle":
@@ -301,8 +319,13 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 }
 
 type registrationCapability struct {
-	RequestInterceptor bool `json:"request_interceptor"`
-	ManagementAPI      bool `json:"management_api"`
+	RequestInterceptor    bool     `json:"request_interceptor"`
+	ManagementAPI         bool     `json:"management_api"`
+	ModelRegistrar        bool     `json:"model_registrar"`
+	Executor              bool     `json:"executor"`
+	ExecutorModelScope    string   `json:"executor_model_scope,omitempty"`
+	ExecutorInputFormats  []string `json:"executor_input_formats,omitempty"`
+	ExecutorOutputFormats []string `json:"executor_output_formats,omitempty"`
 }
 
 type pluginRegistration struct {
@@ -323,9 +346,21 @@ func buildRegistration() pluginRegistration {
 				{Name: "caveman", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject caveman compressed-reply instruction into routed requests."},
 				{Name: "ponytail", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject ponytail lazy-solution instruction into routed requests."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model prefixes to inject; empty means all."},
+				{Name: "router_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Expose the cpa router virtual model through the Herdr-orchestrated executor."},
+				{Name: "router_agent", Type: pluginapi.ConfigFieldTypeString, Description: "Herdr agent selector (agent kind or pane id) used as the lead."},
+				{Name: "router_timeout_ms", Type: pluginapi.ConfigFieldTypeInteger, Description: "Bound on the lead wait in milliseconds."},
+				{Name: "router_read_lines", Type: pluginapi.ConfigFieldTypeInteger, Description: "Terminal read-back window for result marker extraction."},
 			},
 		},
-		Capabilities: registrationCapability{RequestInterceptor: true, ManagementAPI: true},
+		Capabilities: registrationCapability{
+			RequestInterceptor:    true,
+			ManagementAPI:         true,
+			ModelRegistrar:        true,
+			Executor:              true,
+			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeStatic),
+			ExecutorInputFormats:  []string{"openai"},
+			ExecutorOutputFormats: []string{"openai"},
+		},
 	}
 }
 
@@ -611,8 +646,10 @@ type envelope struct {
 }
 
 type envelopeError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Retryable  bool   `json:"retryable,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
 func okEnvelope(v any) ([]byte, error) {
@@ -629,6 +666,13 @@ func okEnvelopeJSON(result string) ([]byte, error) {
 
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
+	return raw
+}
+
+func errorEnvelopeStatus(code, message string, status int, retryable bool) []byte {
+	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{
+		Code: code, Message: message, HTTPStatus: status, Retryable: retryable,
+	}})
 	return raw
 }
 
