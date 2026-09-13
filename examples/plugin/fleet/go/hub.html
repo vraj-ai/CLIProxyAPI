@@ -1,0 +1,353 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet — control plane</title>
+<style>
+  :root {
+    --bg:#07090d; --panel:#0d1218; --panel2:#111821; --line:#1c242e; --line2:#26303c;
+    --text:#d7dde3; --muted:#67727f; --faint:#46505c;
+    --ok:#3fb950; --warn:#d29922; --link:#58a6ff; --bad:#f85149; --chip:#121924;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  html { background:var(--bg); }
+  body { background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,system-ui,sans-serif; margin:0;
+         background-image:radial-gradient(ellipse 90% 50% at 50% -10%, #0d1522 0%, transparent 70%); }
+  .top { max-width:1180px; margin:0 auto; padding:22px 24px 48px; }
+  :focus-visible { outline:2px solid var(--link); outline-offset:2px; border-radius:4px; }
+
+  /* command strip */
+  .strip { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+           padding-bottom:14px; border-bottom:1px solid var(--line); }
+  .wordmark { font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:.28em; color:var(--text); }
+  .wordmark .dotmark { color:var(--ok); }
+  .wordmark .sub { letter-spacing:.02em; font-weight:400; font-size:12px; color:var(--muted); margin-left:14px; font-family:var(--mono); }
+  .nav { display:flex; gap:2px; align-items:center; }
+  .nav a { font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--muted); text-decoration:none;
+           padding:4px 10px; border-radius:4px; }
+  .nav a:hover { color:var(--text); background:var(--panel2); }
+  .nav a.here { color:var(--link); }
+  .keybox { display:flex; gap:8px; align-items:center; }
+  .keybox input { background:var(--chip); border:1px solid var(--line); border-radius:4px; color:var(--text);
+                  padding:6px 10px; font:12px var(--mono); width:230px; }
+  .keybox input:focus { outline:2px solid var(--link); outline-offset:0; }
+  .keybox .hint { color:var(--warn); font-size:11px; font-family:var(--mono); }
+
+  /* instrument panels */
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px 18px; margin-top:16px;
+          box-shadow:0 1px 0 #ffffff05 inset, 0 12px 32px -18px #000; }
+  .card h2 { font:600 10px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--muted);
+             margin:0 0 14px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .card h2 .act { letter-spacing:.04em; font-weight:400; text-transform:none; color:var(--faint); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:12px; }
+  .card.g { margin-top:0; background:var(--panel2); }
+  .mono { font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); }
+  .link { color:var(--link); text-decoration:none; } .link:hover { text-decoration:underline; }
+
+  /* pipeline — the signal path */
+  .pipe { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+  .pipe .node { background:var(--panel2); border:1px solid var(--line2); border-radius:5px; padding:8px 12px;
+                display:flex; gap:8px; align-items:center; }
+  .pipe .node b { font-size:12px; font-weight:600; }
+  .pipe .node .sub2 { font-family:var(--mono); font-size:10px; color:var(--faint); }
+  .pipe .seg { align-self:center; width:26px; height:1px; flex:none; margin:0 2px;
+               background:linear-gradient(90deg,var(--line2),var(--line2)); position:relative; overflow:visible; }
+  .pipe .seg::after { content:""; position:absolute; top:-1px; left:0; width:8px; height:3px; border-radius:2px;
+                      background:var(--ok); opacity:.85; filter:blur(.4px);
+                      animation:carrier 2.8s linear infinite; }
+  .pipe .seg:nth-of-type(4)::after { animation-delay:.9s; }
+  .pipe .seg:nth-of-type(6)::after { animation-delay:1.8s; }
+  @keyframes carrier { 0% { left:-8px; opacity:0; } 15% { opacity:.9; } 85% { opacity:.9; } 100% { left:100%; opacity:0; } }
+  @media (prefers-reduced-motion:reduce) { .pipe .seg::after { animation:none; opacity:.35; left:40%; } }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--faint); display:inline-block; flex:none; }
+  .dot.on { background:var(--ok); box-shadow:0 0 6px #3fb95066; }
+  .dot.off { background:var(--bad); } .dot.idle { background:var(--warn); }
+
+  /* quota instruments */
+  .quota-name { font-family:var(--mono); font-size:12px; font-weight:600; display:flex; justify-content:space-between; align-items:baseline; }
+  .quota-name .plan { font-weight:400; font-size:10px; color:var(--faint); letter-spacing:.06em; }
+  .res { margin-top:12px; }
+  .res .lbl { display:flex; justify-content:space-between; font:10px var(--mono); color:var(--muted); margin-bottom:5px; letter-spacing:.04em; }
+  .bar { position:relative; height:5px; background:var(--chip); border-radius:3px; }
+  .bar .fill { position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#2ea043,var(--ok)); border-radius:3px; }
+  .bar.behind .fill { background:linear-gradient(90deg,#a02c2c,var(--bad)); }
+  .bar .tick { position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--text); opacity:.75; }
+  .badge { display:inline-block; font:10px var(--mono); padding:1px 7px; border-radius:3px; border:1px solid var(--line2); color:var(--muted); letter-spacing:.05em; }
+  .badge.ok { color:var(--ok); border-color:#3fb95055; background:#3fb95010; }
+  .badge.warn { color:var(--warn); border-color:#d2992255; background:#d2992210; }
+  .badge.bad { color:var(--bad); border-color:#f8514955; background:#f8514910; }
+
+  /* tables + candidates */
+  .rows { width:100%; border-collapse:collapse; font-size:13px; }
+  .rows td, .rows th { padding:7px 10px 7px 0; border-top:1px solid var(--line); text-align:left; }
+  .rows th { font:600 10px var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--faint); border-top:none; }
+  .rows td .pname { font-family:var(--mono); font-size:12px; }
+  .cand { display:flex; justify-content:space-between; align-items:center; padding:8px 12px;
+          border:1px solid var(--line); border-radius:5px; margin-top:6px; background:var(--panel2); }
+  .cand.next { border-color:#3fb95066; background:#3fb9500a; }
+  .cand .clabel { font-family:var(--mono); font-size:12px; font-weight:600; }
+  .cand .why { font:11px var(--mono); color:var(--muted); }
+  .cand .why.bad { color:var(--bad); }
+  .effort-ladder { display:flex; gap:5px; flex-wrap:wrap; }
+  .effort-ladder .e { font:10px var(--mono); padding:2px 9px; border-radius:3px; background:var(--chip);
+                      border:1px solid var(--line); color:var(--muted); letter-spacing:.08em; }
+
+  /* switches + chips */
+  .sw { position:relative; width:32px; height:18px; flex:none; cursor:pointer; }
+  .sw input { opacity:0; width:0; height:0; }
+  .sw .tr { position:absolute; inset:0; background:var(--chip); border:1px solid var(--line2); border-radius:9px; transition:.15s; }
+  .sw .tr::after { content:""; position:absolute; left:2px; top:2px; width:12px; height:12px; border-radius:50%; background:var(--faint); transition:.15s; }
+  .sw input:checked + .tr { background:#58a6ff22; border-color:var(--link); }
+  .sw input:checked + .tr::after { transform:translateX(13px); background:var(--link); }
+  .sw input:disabled + .tr { opacity:.4; cursor:not-allowed; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font:11px var(--mono); padding:3px 10px; border-radius:4px; border:1px solid var(--line);
+          background:var(--chip); color:var(--muted); cursor:pointer; letter-spacing:.02em; }
+  .chip.on { color:var(--ok); border-color:#3fb95055; background:#3fb95010; }
+  .chip:hover { border-color:var(--link); color:var(--text); }
+  .search { background:var(--chip); border:1px solid var(--line); border-radius:4px; color:var(--text);
+            padding:5px 9px; font:11px var(--mono); width:190px; }
+
+  .flags { display:flex; gap:10px; flex-wrap:wrap; }
+  .flag { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:8px 12px; display:flex; gap:9px; align-items:center; }
+  .flag b { font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.04em; }
+  .flag .fdesc { font-size:10px; color:var(--faint); }
+
+  .toast { position:fixed; bottom:18px; right:18px; background:var(--panel2); border:1px solid var(--line2);
+           border-radius:5px; padding:10px 14px; font:12px var(--mono); max-width:380px; box-shadow:0 8px 24px #000a; }
+  .toast.err { border-color:var(--bad); } .toast.ok { border-color:var(--ok); }
+  .empty { color:var(--faint); font-size:12px; font-family:var(--mono); }
+  #lock { text-align:center; padding:90px 20px; }
+  #lock .card { display:inline-block; text-align:left; min-width:360px; }
+  footer { color:var(--faint); font:11px var(--mono); margin-top:20px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+</style></head><body>
+<div class="top">
+<header class="strip">
+  <div>
+    <span class="wordmark">FLEET<span class="dotmark">·</span><span class="sub" id="linkline"></span></span>
+  </div>
+  <nav class="nav" aria-label="surfaces">
+    <a href="/v0/resource/plugins/fleet/hub" class="here">hub</a>
+    <a href="/v0/resource/plugins/fleet/savings">savings</a>
+    <a href="/v0/resource/plugins/fleet/router">router</a>
+    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
+    <a href="/management.html" target="_blank" rel="noopener">console</a>
+  </nav>
+  <div class="keybox">
+    <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
+    <span class="hint" id="keyhint"></span>
+  </div>
+</header>
+
+<div id="lock"><div class="card"><h2>Management key</h2>
+  <p class="muted" style="margin:0 0 10px">The hub reads and mutates live proxy state through the key-gated management API. Paste the key once; it stays in this browser.</p>
+  <div class="muted mono" id="lockerr"></div>
+</div></div>
+
+<div id="dash" hidden>
+
+<div class="card"><h2>Pipeline<span class="act" id="pipenote"></span></h2>
+  <div class="pipe" id="pipeline"></div>
+</div>
+
+<div class="card"><h2>Quota pace<span class="act">used vs elapsed · openusage --force · 15s cache</span></h2>
+  <div class="grid" id="quota"></div>
+</div>
+
+<div class="card"><h2>CPA Router<span class="act" id="routersub"></span></h2>
+  <div id="routerbody"></div>
+  <h2 style="margin-top:18px">Recent decisions</h2>
+  <div id="decisions" style="font-size:12px"></div>
+</div>
+
+<div class="card"><h2>Providers<span class="act">toggles write through the core management API</span></h2>
+  <table class="rows"><thead><tr><th>provider</th><th>kind</th><th>models</th><th>state</th><th></th></tr></thead><tbody id="providers"></tbody></table>
+</div>
+
+<div class="card"><h2>Models · pxpipe scope<span class="act">lit = request body gets pxpipe transform</span></h2>
+  <input class="search" id="mfilter" placeholder="filter models…" aria-label="filter models">
+  <div class="chips" id="models" style="margin-top:12px"></div>
+</div>
+
+<div class="card"><h2>Fleet flags<span class="act">plugins/fleet/config — persists to config.yaml</span></h2>
+  <div class="flags" id="flags"></div>
+</div>
+
+<footer>
+  <span id="stamp"></span>
+  <span>one link · <span class="mono">http://127.0.0.1:8317/v1</span></span>
+</footer>
+</div>
+</div>
+<div id="toast"></div>
+<script>
+const MGMT = "/v0/management";
+const LS = "fleet.hub.key";
+const keyEl = document.getElementById("key");
+keyEl.value = localStorage.getItem(LS) || "";
+keyEl.addEventListener("change", () => { localStorage.setItem(LS, keyEl.value); refresh(); });
+keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem(LS, keyEl.value); refresh(); } });
+
+function toast(msg, cls) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast " + (cls || "ok");
+  setTimeout(() => { t.textContent = ""; t.className = ""; }, 3200);
+}
+async function api(path, opts) {
+  const r = await fetch(MGMT + path, Object.assign({ headers: { "authorization": "Bearer " + keyEl.value, "content-type": "application/json" } }, opts || {}));
+  if (r.status === 401 || r.status === 403) { throw Object.assign(new Error("bad management key"), { auth: true }); }
+  if (!r.ok) { let m = "HTTP " + r.status; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+  return r.json();
+}
+const pct = x => (x * 100).toFixed(0) + "%";
+const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : (Math.round(n * 10) / 10).toString();
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return Math.floor(s) + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  return Math.floor(s / 3600) + "h ago";
+}
+function until(iso) {
+  const s = (new Date(iso) - Date.now()) / 1000;
+  if (s < 0) return "now";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h" + Math.floor((s % 3600) / 60) + "m";
+  return Math.floor(s / 86400) + "d" + Math.floor((s % 86400) / 3600) + "h";
+}
+
+function renderPipe(s) {
+  const nodes = [
+    ["harness", true, "pi / any client"],
+    ["pxpipe proxy", s.pxpipe.reachable, s.pxpipe.reachable ? "47821" : "down"],
+    ["shim", s.pxpipe.shim_enabled ? s.pxpipe.shim_up : null, s.pxpipe.shim_enabled ? (s.pxpipe.shim_up ? "transform" : "down") : "off"],
+    ["cliproxyapi", true, "8317"],
+    ["fleet plugin", true, "caveman·ponytail·router"],
+    ["lead agent", s.router.enabled ? !!s.router.eligible : null, s.router.eligible || (s.router.enabled ? "none eligible" : "router off")]
+  ];
+  document.getElementById("pipeline").innerHTML = nodes.map(n => {
+    const dot = n[1] === null ? "idle" : (n[1] ? "on" : "off");
+    return '<div class="node"><span class="dot ' + dot + '"></span><b>' + n[0] + '</b><span class="sub2">' + n[2] + '</span></div>';
+  }).join('<span class="seg" aria-hidden="true"></span>');
+  document.getElementById("linkline").textContent = "· point harnesses at " + s.link;
+}
+
+function renderQuota(s) {
+  const el = document.getElementById("quota");
+  if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
+  el.innerHTML = s.quota.map(p => {
+    const res = (p.resources || []).map(r => {
+      const used = r.used_frac || 0, elapsed = r.paced_frac || 0;
+      const behind = r.paced;
+      return '<div class="res"><div class="lbl"><span>' + r.name + '</span><span>' +
+        fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
+        ' <span class="badge ' + (behind ? "bad" : "ok") + '">' + (behind ? "behind pace" : "on pace") + '</span></span></div>' +
+        '<div class="bar' + (behind ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
+        '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
+    }).join("");
+    return '<div class="card g"><div class="quota-name">' + p.name + '<span class="plan">' + (p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
+  }).join("");
+}
+
+function renderRouter(s) {
+  const r = s.router;
+  document.getElementById("routersub").textContent = r.enabled ? (r.eligible ? "next request → " + r.eligible : "enabled · nothing eligible right now") : "disabled";
+  const cands = (r.candidates || []).map(c =>
+    '<div class="cand' + (c.ok ? " next" : "") + '"><span class="clabel">' + c.label + ' <span class="muted">' + (c.model || "—") + " · " + (c.effort || "—") + '</span></span>' +
+    '<span class="why' + (c.ok ? "" : " bad") + '">' + (c.ok ? "eligible" : c.reason) + '</span></div>').join("");
+  document.getElementById("routerbody").innerHTML =
+    '<div class="effort-ladder">' + ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(e => '<span class="e">' + e + "</span>").join("") + "</div>" +
+    '<div style="margin-top:12px">' + (cands || '<span class="empty">router disabled</span>') + "</div>";
+  const dec = (r.decisions || []).slice(-14).reverse().map(d =>
+    '<div class="res" style="margin-top:7px"><div class="lbl"><span class="mono">' + d.correlation_id + '</span><span>' + ago(d.at) + '</span></div>' +
+    '<span class="mono ' + (d.outcome === "served" || d.outcome === "completed" ? "" : "muted") + '">' + d.outcome + (d.agent ? " → " + d.agent : "") + (d.effort ? " · " + d.effort : "") + (d.reason ? ' <span class="badge warn">' + d.reason + "</span>" : "") + (d.sidekick ? ' <span class="badge">sidekick: ' + d.sidekick + "</span>" : "") + '</span></div>').join("");
+  document.getElementById("decisions").innerHTML = dec || '<span class="empty">no router traffic yet</span>';
+}
+
+async function toggleAuth(name, disabled, el) {
+  el.disabled = true;
+  try {
+    await api("/auth-files/status", { method: "PATCH", body: JSON.stringify({ name: name, disabled: disabled }) });
+    toast((disabled ? "disabled " : "enabled ") + name); refresh();
+  } catch (e) { toast(e.message, "err"); el.disabled = false; refresh(); }
+}
+async function toggleCompat(name, disabled, el) {
+  el.disabled = true;
+  try {
+    await api("/openai-compatibility", { method: "PATCH", body: JSON.stringify({ name: name, value: { disabled: disabled } }) });
+    toast((disabled ? "disabled " : "enabled ") + name); refresh();
+  } catch (e) { toast(e.message, "err"); el.disabled = false; refresh(); }
+}
+const maskFile = f => f.replace(/[^@.]{2}[^@]*@/, m => m.slice(0, 2) + "…@").replace(/\.json$/, "");
+function renderProviders(s) {
+  document.getElementById("providers").innerHTML = (s.providers || []).map((p, i) => {
+    const dis = p.disabled;
+    const label = p.kind === "plugin" ? '<span class="badge">virtual</span>' : (dis ? '<span class="badge bad">off</span>' : '<span class="badge ok">on</span>');
+    const sw = '<label class="sw"><input type="checkbox" ' + (dis ? "" : "checked") + ' onchange="providerToggle(' + i + ',this.checked,this)"><span class="tr"></span></label>';
+    const detail = p.kind === "oauth" ? maskFile(p.detail || "") : (p.detail || "");
+    return '<tr><td><span class="pname">' + p.name + '</span> <span class="muted mono">' + detail + '</span></td><td class="muted mono">' + p.kind + "</td><td class=\"muted mono\">" + (p.models || []).length + "</td><td>" + label + "</td><td>" + sw + "</td></tr>";
+  }).join("");
+  window.__providers = s.providers;
+}
+async function providerToggle(i, on, el) {
+  const p = window.__providers[i];
+  if (p.kind === "plugin") { await setFlag("router_enabled", on, el); return; }
+  if (p.kind === "compat") { await toggleCompat(p.name, !on, el); return; }
+  await toggleAuth(p.detail, !on, el);
+}
+
+async function toggleScope(model, on, el) {
+  el.style.opacity = .4;
+  try {
+    await api("/fleet/pxpipe/scope/toggle", { method: "POST", body: JSON.stringify({ model: model, on: on }) });
+    refresh();
+  } catch (e) { toast(e.message, "err"); el.style.opacity = 1; }
+}
+function renderModels(s) {
+  const q = (document.getElementById("mfilter").value || "").toLowerCase();
+  const scope = new Set(s.pxpipe.scope || []);
+  const list = (s.models || []).filter(m => !q || m.toLowerCase().includes(q));
+  document.getElementById("models").innerHTML = list.length
+    ? list.map(m => '<span class="chip' + (scope.has(m) ? " on" : "") + '" title="toggle pxpipe transform" onclick="toggleScope(\'' + m.replace(/'/g, "") + '\',' + !scope.has(m) + ',this)">' + m + "</span>").join("")
+    : '<span class="empty">no models served — enable a provider above</span>';
+}
+document.getElementById("mfilter").addEventListener("input", () => window.__state && renderModels(window.__state));
+
+async function setFlag(key, val, el) {
+  if (el) el.disabled = true;
+  try {
+    await api("/plugins/fleet/config", { method: "PATCH", body: JSON.stringify({ [key]: val }) });
+    toast(key + " = " + val); refresh();
+  } catch (e) { toast(e.message, "err"); refresh(); }
+}
+function renderFlags(s) {
+  const f = s.flags;
+  const rows = [["caveman", "caveman", f.caveman, "compressed-reply instruction"], ["ponytail", "ponytail", f.ponytail, "lazy-solution instruction"], ["router", "router_enabled", f.router, "cpa router virtual model"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop in the link"]];
+  document.getElementById("flags").innerHTML = rows.map(r =>
+    '<div class="flag"><label class="sw"><input type="checkbox" ' + (r[2] ? "checked" : "") + ' onchange="setFlag(\'' + r[1] + '\',' + !r[2] + ',this)"><span class="tr"></span></label><b>' + r[0] + '</b><span class="fdesc">' + r[3] + "</span></div>").join("");
+}
+
+let inflight = false;
+async function refresh() {
+  if (inflight) return; inflight = true;
+  document.getElementById("keyhint").textContent = "";
+  try {
+    const s = await api("/fleet/state");
+    window.__state = s;
+    document.getElementById("lock").hidden = true;
+    document.getElementById("dash").hidden = false;
+    renderPipe(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderFlags(s);
+    document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString() + " · auto-refresh 15s";
+  } catch (e) {
+    if (e.auth) {
+      document.getElementById("lock").hidden = false;
+      document.getElementById("dash").hidden = true;
+      document.getElementById("lockerr").textContent = keyEl.value ? "Key rejected — check remote-management.secret-key." : "";
+      document.getElementById("keyhint").textContent = "required";
+    } else {
+      toast("state fetch failed: " + e.message, "err");
+    }
+  }
+  inflight = false;
+}
+refresh();
+setInterval(refresh, 15000);
+</script></body></html>

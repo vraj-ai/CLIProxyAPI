@@ -580,41 +580,58 @@ func savingsHTML(px pxStats, ug ugStats, inj int64) string {
 		ugClass = "big warn"
 	}
 
-	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+	return fmt.Sprintf(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fleet — savings</title>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --muted:#8b949e; --accent:#3fb950; --warn:#d29922; --link:#58a6ff; }
+  :root { --bg:#07090d; --panel:#0d1218; --panel2:#111821; --line:#1c242e; --line2:#26303c;
+          --text:#d7dde3; --muted:#67727f; --faint:#46505c;
+          --accent:#3fb950; --warn:#d29922; --link:#58a6ff;
+          --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace; }
   * { box-sizing:border-box; }
-  body { background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; }
-  .top { max-width:1100px; margin:0 auto; padding:20px 24px 32px; }
-  header { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0; font-weight:600; }
-  nav a { color:var(--link); font-size:13px; margin-left:14px; text-decoration:none; }
-  nav a:hover { text-decoration:underline; }
-  a:focus-visible { outline:2px solid var(--link); outline-offset:2px; }
-  .note { color:var(--muted); font-size:12px; margin:6px 0 0; max-width:72ch; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin:18px 0 12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
-  .card h2, .live h2 { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; font-weight:600; }
-  .big { font-size:26px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+  html { background:var(--bg); }
+  body { background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,system-ui,sans-serif; margin:0;
+         background-image:radial-gradient(ellipse 90%% 50%% at 50%% -10%%, #0d1522 0%%, transparent 70%%); }
+  .top { max-width:1100px; margin:0 auto; padding:22px 24px 40px; }
+  :focus-visible { outline:2px solid var(--link); outline-offset:2px; border-radius:4px; }
+  .strip { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+           padding-bottom:14px; border-bottom:1px solid var(--line); }
+  .wordmark { font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:.28em; color:var(--text); }
+  .wordmark .dotmark { color:var(--accent); }
+  .nav { display:flex; gap:2px; align-items:center; }
+  .nav a { font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--muted); text-decoration:none; padding:4px 10px; border-radius:4px; }
+  .nav a:hover { color:var(--text); background:var(--panel2); }
+  .nav a.here { color:var(--link); }
+  .note { color:var(--faint); font:11px var(--mono); margin:12px 0 0; max-width:72ch; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin:16px 0 12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px 18px;
+          box-shadow:0 1px 0 #ffffff05 inset, 0 12px 32px -18px #000; }
+  .card h2, .live h2 { font:600 10px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }
+  .big { font:700 26px var(--mono); color:var(--accent); font-variant-numeric:tabular-nums; }
   .big.warn { color:var(--warn); }
-  .meta { font-size:12px; color:var(--muted); margin-top:4px; }
+  .meta { font:11px var(--mono); color:var(--muted); margin-top:5px; }
   table { width:100%%; font-size:13px; border-collapse:collapse; }
-  th { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); text-align:left; padding:0 8px 6px 0; font-weight:600; }
-  td { padding:5px 8px 5px 0; border-top:1px solid var(--line); }
+  th { font:600 10px var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--faint); text-align:left; padding:0 8px 8px 0; }
+  td { padding:6px 8px 6px 0; border-top:1px solid var(--line); font-family:var(--mono); font-size:12px; }
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
   td.num { color:var(--accent); }
-  .empty { color:var(--muted); }
-  .live { margin-top:18px; }
-  .live h2 a { color:var(--link); text-transform:none; letter-spacing:0; }
-  iframe { display:block; width:100%%; height:62vh; min-height:420px; border:1px solid var(--line); border-radius:10px; background:#0d1117; }
+  .empty { color:var(--faint); }
+  .live { margin-top:16px; }
+  .live h2 a { color:var(--link); text-transform:none; letter-spacing:.04em; }
+  iframe { display:block; width:100%%; height:62vh; min-height:420px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
 </style></head><body>
 <div class="top">
-<header>
-  <h1>Fleet — savings</h1>
-  <nav><a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe ↗</a><a href="?format=json">JSON</a></nav>
+<header class="strip">
+  <span class="wordmark">FLEET<span class="dotmark">·</span><span style="letter-spacing:.12em;font-size:11px;color:var(--muted);font-weight:400"> SAVINGS</span></span>
+  <nav class="nav" aria-label="surfaces">
+    <a href="/v0/resource/plugins/fleet/hub">hub</a>
+    <a href="/v0/resource/plugins/fleet/savings" class="here">savings</a>
+    <a href="/v0/resource/plugins/fleet/router">router</a>
+    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
+    <a href="/management.html" target="_blank" rel="noopener">console</a>
+    <a href="?format=json">json</a>
+  </nav>
 </header>
-<p class="note">Historical local telemetry, not attributed to this route. Text/byte reduction is not token or dollar savings; image token cost is excluded.</p>
+<p class="note">historical local telemetry, not attributed to this route. text/byte reduction is not token or dollar savings; image token cost is excluded.</p>
 <div class="grid">
   <div class="card"><h2>pxpipe compression</h2>
     <div class="%s">%.1f%%</div>
@@ -634,7 +651,7 @@ func savingsHTML(px pxStats, ug ugStats, inj int64) string {
   <table><tr><th>model</th><th class="num">chars reduced</th></tr>%s</table>
 </div>
 <div class="live">
-  <h2>pxpipe — live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">open in tab ↗</a></h2>
+  <h2>pxpipe — live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe ↗</a></h2>
   <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
 </div>
 </div>
