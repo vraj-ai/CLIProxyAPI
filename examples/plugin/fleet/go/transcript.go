@@ -14,6 +14,11 @@ import (
 
 const toolCallMarker = "CPA-TOOL-CALL:"
 
+// maxTranscriptBytes keeps the serialized conversation inside a single argv
+// element — MAX_ARG_STRLEN is 128KB/string on Linux; we stay well under it
+// and under macOS ARG_MAX headroom after herdr's own wrapper text.
+const maxTranscriptBytes = 96 * 1024
+
 type toolCall struct {
 	ID        string
 	Name      string
@@ -73,6 +78,11 @@ func conversationText(payload []byte) (string, error) {
 	out := strings.TrimSpace(b.String())
 	if out == "" {
 		return "", routerErr("bad_request", "executor payload has no message text", http.StatusBadRequest)
+	}
+	if len(out) > maxTranscriptBytes {
+		// Keep the newest turns — the pending mutation check above already ran
+		// on the full list, so truncation only drops answered history.
+		out = "[earlier context truncated]\n" + out[len(out)-maxTranscriptBytes:]
 	}
 	return out, nil
 }

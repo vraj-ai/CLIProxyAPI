@@ -26,12 +26,12 @@ const (
 // verification inside its framed output.
 func escalationTriggers(req *executorCallRequest, res leadResult) []string {
 	var triggers []string
-	for _, v := range req.Headers["x-fleet-difficulty"] {
+	for _, v := range req.Headers.Values("x-fleet-difficulty") {
 		if highSignal(v) {
 			triggers = append(triggers, "difficulty")
 		}
 	}
-	for _, v := range req.Headers["x-fleet-importance"] {
+	for _, v := range req.Headers.Values("x-fleet-importance") {
 		if highSignal(v) {
 			triggers = append(triggers, "importance")
 		}

@@ -172,7 +172,7 @@ func quotaGate(sub string, snap map[string]providerQuota, now time.Time, approve
 // approvalGranted is the explicit, retry-scoped approval signal: the client
 // sends `x-fleet-approve: retry`. Nothing else authorizes a gated route.
 func approvalGranted(req *executorCallRequest) bool {
-	for _, v := range req.Headers["x-fleet-approve"] {
+	for _, v := range req.Headers.Values("x-fleet-approve") {
 		if v == "retry" {
 			return true
 		}

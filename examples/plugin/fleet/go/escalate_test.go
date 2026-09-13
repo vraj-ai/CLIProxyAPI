@@ -52,7 +52,7 @@ func TestRoutineRequestStaysSingleLead(t *testing.T) {
 func TestDifficultyTriggerEscalates(t *testing.T) {
 	resetRouter(pluginConfig{RouterEnabled: true}, escalatedBackend())
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-difficulty": {"high"}}
+	req.Headers = http.Header{"X-Fleet-Difficulty": {"high"}}
 	env := callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if !env.OK {
 		t.Fatalf("env = %+v", env)
@@ -101,7 +101,7 @@ func TestDifficultyTriggerEscalates(t *testing.T) {
 func TestImportanceTriggerEscalates(t *testing.T) {
 	resetRouter(pluginConfig{RouterEnabled: true}, escalatedBackend())
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-importance": {"critical"}}
+	req.Headers = http.Header{"X-Fleet-Importance": {"critical"}}
 	env := callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if !env.OK {
 		t.Fatalf("env = %+v", env)
@@ -144,7 +144,7 @@ func TestNoEligibleSidekickFailsClosed(t *testing.T) {
 		result: leadResult{Text: "draft", Agent: "w1B:p1", Verification: "ok"},
 	})
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-difficulty": {"high"}}
+	req.Headers = http.Header{"X-Fleet-Difficulty": {"high"}}
 	env := callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if env.OK || env.Error == nil || env.Error.Code != "no_eligible_sidekick" {
 		t.Fatalf("env = %+v", env)
@@ -182,7 +182,7 @@ func TestSidekickSelectionRespectsQuota(t *testing.T) {
 	state.quota = fakeQuota{snap: quota}
 	state.mu.Unlock()
 	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"x-fleet-difficulty": {"high"}}
+	req.Headers = http.Header{"X-Fleet-Difficulty": {"high"}}
 	env := callMethod(t, pluginabi.MethodExecutorExecute, req)
 	if !env.OK {
 		t.Fatalf("env = %+v", env)
