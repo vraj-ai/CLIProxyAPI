@@ -39,6 +39,7 @@ func resetRouter(cfg pluginConfig, b leadBackend) {
 	resetState(cfg)
 	state.mu.Lock()
 	state.backend = b
+	state.quota = fakeQuota{snap: healthyQuota()}
 	state.decisions = nil
 	state.mu.Unlock()
 }

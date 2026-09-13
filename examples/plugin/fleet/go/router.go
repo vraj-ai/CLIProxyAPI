@@ -91,6 +91,15 @@ func routerConfig() pluginConfig {
 	return state.config
 }
 
+func currentQuota() quotaSource {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.quota != nil {
+		return state.quota
+	}
+	return defaultQuota()
+}
+
 func currentBackend() leadBackend {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -175,7 +184,12 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	sel, err := selectCandidate(live, requestedEffort(req.Payload))
+	quota, err := currentQuota().fetch(ctx)
+	if err != nil {
+		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
+		return nil, err
+	}
+	sel, err := selectCandidate(live, requestedEffort(req.Payload), quota, nowFunc(), approvalGranted(req))
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err

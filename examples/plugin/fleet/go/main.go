@@ -128,6 +128,7 @@ var state = struct {
 	config     pluginConfig
 	injections int64
 	backend    leadBackend
+	quota      quotaSource
 	decisions  []routeDecision
 }{}
 

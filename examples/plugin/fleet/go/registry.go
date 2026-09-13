@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // candidate is one entry in the ordered preference list.
@@ -74,7 +75,7 @@ type selection struct {
 // selectCandidate walks the preference order and returns the first candidate
 // whose every forwarded fact is verified and whose live agent exists.
 // reqEffort is the client-requested effort ("" means none required).
-func selectCandidate(live []herdrAgent, reqEffort string) (selection, error) {
+func selectCandidate(live []herdrAgent, reqEffort string, quota map[string]providerQuota, now time.Time, approved bool) (selection, error) {
 	var skipped []skipReason
 	for _, c := range preferenceOrder {
 		if !c.PolicyOK {
@@ -104,6 +105,10 @@ func selectCandidate(live []herdrAgent, reqEffort string) (selection, error) {
 		agent, ok := liveAgentFor(live, c.Kind)
 		if !ok {
 			skipped = append(skipped, skipReason{c.Label, "agent_unavailable"})
+			continue
+		}
+		if gate := quotaGate(c.Subscription, quota, now, approved); gate != "" {
+			skipped = append(skipped, skipReason{c.Label, gate})
 			continue
 		}
 		return selection{Chosen: c, Agent: agent, Effort: effort, Skipped: skipped}, nil
