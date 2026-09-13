@@ -19,7 +19,12 @@ import (
 type fakeBackend struct {
 	result leadResult
 	err    error
+	live   []herdrAgent
 	calls  []leadRequest
+}
+
+func (f *fakeBackend) agents(_ context.Context) ([]herdrAgent, error) {
+	return f.live, nil
 }
 
 func (f *fakeBackend) runLead(_ context.Context, req leadRequest) (leadResult, error) {
@@ -111,7 +116,7 @@ func TestExecutorIdentifier(t *testing.T) {
 }
 
 func TestExecutorExecuteReturnsLeadResponse(t *testing.T) {
-	backend := &fakeBackend{result: leadResult{Text: "lead answer", Agent: "w1B:p1"}}
+	backend := &fakeBackend{result: leadResult{Text: "lead answer", Agent: "w1B:p1"}, live: []herdrAgent{{Name: "pi", Status: "idle", PaneID: "w1B:p1"}}}
 	resetRouter(pluginConfig{RouterEnabled: true, RouterAgent: "pi"}, backend)
 
 	env := callMethod(t, pluginabi.MethodExecutorExecute,
@@ -138,7 +143,7 @@ func TestExecutorExecuteReturnsLeadResponse(t *testing.T) {
 		t.Fatalf("lead calls = %d", len(backend.calls))
 	}
 	call := backend.calls[0]
-	if call.Task != "say hi" || call.Agent != "pi" || call.CorrelationID == "" {
+	if call.Task != "say hi" || call.Agent != "w1B:p1" || call.CorrelationID == "" {
 		t.Fatalf("lead request = %+v", call)
 	}
 	if completion["id"] != "chatcmpl-"+call.CorrelationID {
@@ -147,7 +152,7 @@ func TestExecutorExecuteReturnsLeadResponse(t *testing.T) {
 }
 
 func TestExecutorExecuteConcreteModelBypassed(t *testing.T) {
-	backend := &fakeBackend{result: leadResult{Text: "x"}}
+	backend := &fakeBackend{result: leadResult{Text: "x"}, live: []herdrAgent{{Name: "pi", Status: "idle", PaneID: "w1B:p1"}}}
 	resetRouter(pluginConfig{RouterEnabled: true, RouterAgent: "pi"}, backend)
 	env := callMethod(t, pluginabi.MethodExecutorExecute,
 		execRequest("gpt-6-astra", `{"messages":[{"role":"user","content":"hi"}]}`))
@@ -183,7 +188,7 @@ func TestExecutorUnsupportedCapabilitiesFailExplicitly(t *testing.T) {
 }
 
 func TestExecutorExecuteLeadFailureSurfaces(t *testing.T) {
-	backend := &fakeBackend{err: routerErr("lead_busy", "lead is working", 409)}
+	backend := &fakeBackend{err: routerErr("lead_busy", "lead is working", 409), live: []herdrAgent{{Name: "pi", Status: "idle", PaneID: "w1B:p1"}}}
 	resetRouter(pluginConfig{RouterEnabled: true, RouterAgent: "pi"}, backend)
 	env := callMethod(t, pluginabi.MethodExecutorExecute,
 		execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
@@ -323,7 +328,7 @@ func TestCliHerdrEnvelopeError(t *testing.T) {
 func TestDecisionRecorded(t *testing.T) {
 	resetRouter(pluginConfig{RouterEnabled: true, RouterAgent: "pi"}, &fakeBackend{
 		result: leadResult{Text: "ok", Agent: "w1B:p1"},
-		err:    nil,
+		live:   []herdrAgent{{Name: "pi", Status: "idle", PaneID: "w1B:p1"}},
 	})
 	callMethod(t, pluginabi.MethodExecutorExecute, execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
 	callMethod(t, pluginabi.MethodExecutorExecute, execRequest("gpt-6-astra", `{"messages":[{"role":"user","content":"hi"}]}`))

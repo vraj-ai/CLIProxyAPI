@@ -155,8 +155,8 @@ func (h *cliHerdr) runLead(ctx context.Context, req leadRequest) (leadResult, er
 	if timeoutMS <= 0 {
 		timeoutMS = defaultRouterTimeoutMS
 	}
-	prompt := fmt.Sprintf("[cpa-router %s] Answer as plain text. Wrap the complete final answer between %s%s and %s%s, each marker on its own line.\n\n%s",
-		req.CorrelationID, resultMarkerBegin, req.CorrelationID, resultMarkerEnd, req.CorrelationID, req.Task)
+	prompt := fmt.Sprintf("[cpa-router %s | effort: %s] Answer as plain text. Wrap the complete final answer between %s%s and %s%s, each marker on its own line.\n\n%s",
+		req.CorrelationID, req.Effort, resultMarkerBegin, req.CorrelationID, resultMarkerEnd, req.CorrelationID, req.Task)
 	if perr := h.prompt(ctx, target.PaneID, prompt, timeoutMS); perr != nil {
 		return leadResult{}, perr
 	}

@@ -49,6 +49,8 @@ type leadRequest struct {
 	CorrelationID string
 	Agent         string
 	Task          string
+	Model         string
+	Effort        string
 	Deadline      time.Duration
 }
 
@@ -60,17 +62,21 @@ type leadResult struct {
 // leadBackend is the seam between the executor and the live orchestrator.
 // Production uses cliHerdr; the routing-contract suite substitutes a fake.
 type leadBackend interface {
+	// agents reports the live orchestrator agents selection can target.
+	agents(ctx context.Context) ([]herdrAgent, error)
 	runLead(ctx context.Context, req leadRequest) (leadResult, error)
 }
 
 // routeDecision is the redacted record diagnostics expose later.
 type routeDecision struct {
-	CorrelationID string `json:"correlation_id"`
-	At            string `json:"at"`
-	Model         string `json:"model"`
-	Outcome       string `json:"outcome"`
-	Reason        string `json:"reason,omitempty"`
-	Agent         string `json:"agent,omitempty"`
+	CorrelationID string       `json:"correlation_id"`
+	At            string       `json:"at"`
+	Model         string       `json:"model"`
+	Outcome       string       `json:"outcome"`
+	Reason        string       `json:"reason,omitempty"`
+	Agent         string       `json:"agent,omitempty"`
+	Effort        string       `json:"effort,omitempty"`
+	Skipped       []skipReason `json:"skipped,omitempty"`
 }
 
 var corrCounter atomic.Int64
@@ -162,22 +168,31 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = defaultRouterTimeoutMS
 	}
-	if strings.TrimSpace(cfg.RouterAgent) == "" {
-		return nil, routerErr("router_not_configured", "fleet plugin config needs router_agent naming the lead agent selector", http.StatusServiceUnavailable)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
-	res, err := currentBackend().runLead(ctx, leadRequest{
-		CorrelationID: corr,
-		Agent:         cfg.RouterAgent,
-		Task:          task,
-		Deadline:      time.Duration(timeout) * time.Millisecond,
-	})
+	backend := currentBackend()
+	live, err := backend.agents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sel, err := selectCandidate(live, requestedEffort(req.Payload))
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err
 	}
-	recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "lead_completed", Agent: res.Agent})
+	res, err := backend.runLead(ctx, leadRequest{
+		CorrelationID: corr,
+		Agent:         sel.Agent.PaneID,
+		Task:          task,
+		Model:         sel.Chosen.Model,
+		Effort:        sel.Effort,
+		Deadline:      time.Duration(timeout) * time.Millisecond,
+	})
+	if err != nil {
+		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err), Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped})
+		return nil, err
+	}
+	recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Skipped: sel.Skipped})
 	return openaiCompletion(corr, res.Text), nil
 }
 
