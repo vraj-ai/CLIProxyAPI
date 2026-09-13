@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,7 +65,11 @@ func execRunner(ctx context.Context, argv ...string) ([]byte, error) {
 		return nil, fmt.Errorf("empty command")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	return cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), err
 }
 
 type herdrErrorBody struct {
@@ -187,7 +192,11 @@ func (h *cliHerdr) runLead(ctx context.Context, req leadRequest) (leadResult, er
 	if perr := h.prompt(ctx, target.PaneID, prompt, timeoutMS); perr != nil {
 		return leadResult{}, perr
 	}
-	text, rerr := h.read(ctx, target.PaneID, defaultRouterReadLines)
+	lines := req.ReadLines
+	if lines <= 0 {
+		lines = defaultRouterReadLines
+	}
+	text, rerr := h.read(ctx, target.PaneID, lines)
 	if rerr != nil {
 		return leadResult{}, rerr
 	}

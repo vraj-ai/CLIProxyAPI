@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,52 +238,31 @@ func TestInterceptPrefixExcluded(t *testing.T) {
 	}
 }
 
-func TestSavingsHTMLEscapesModel(t *testing.T) {
-	px := pxStats{ByModel: map[string]int64{"<script>alert(1)</script>": 10}}
-	page := savingsHTML(px, ugStats{}, 0)
-	if strings.Contains(page, "<script>alert(1)</script>") {
-		t.Fatal("model name not escaped")
+func TestSavingsResourceIsHTMLShell(t *testing.T) {
+	out, err := managementDispatch(&pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/fleet/savings",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Fatal("escaped model name missing")
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+		t.Fatalf("envelope %s", out)
 	}
-	if !strings.Contains(page, `src="http://127.0.0.1:47821/"`) {
-		t.Fatal("pxpipe iframe missing")
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(page, `title="pxpipe live dashboard"`) {
-		t.Fatal("iframe title missing")
+	page := string(resp.Body)
+	if !strings.Contains(page, "Unlock savings") {
+		t.Fatal("savings shell missing lock copy")
 	}
-}
-
-func TestSavingsHTMLLayout(t *testing.T) {
-	px := pxStats{
-		Requests: 10, Compressed: 4,
-		CharsBefore: 1000, CharsAfter: 600, SavedPct: 40,
-		ByModel: map[string]int64{"gpt-6-astra": 400},
+	if strings.Contains(page, `"pxpipe"`) && strings.Contains(page, `"saved_pct"`) {
+		t.Fatal("savings resource leaked telemetry JSON")
 	}
-	ug := ugStats{Events: 3, Before: 500, After: 300, SavedPct: 40}
-	page := savingsHTML(px, ug, 7)
-	for _, want := range []string{
-		"pxpipe compression", "subagent context", "instruction injection",
-		"text characters reduced by model", "pxpipe — live dashboard",
-		"not token or dollar savings", "not model compliance",
-		"gpt-6-astra", `?format=json`, `Open pxpipe`,
-		"40.0%", "10 requests", "4 compressed",
-	} {
-		if !strings.Contains(page, want) {
-			t.Fatalf("page missing %q", want)
-		}
-	}
-}
-
-func TestSavingsHTMLEmptyAndNegative(t *testing.T) {
-	empty := savingsHTML(pxStats{ByModel: map[string]int64{}}, ugStats{}, 0)
-	if !strings.Contains(empty, "no compressed requests recorded") {
-		t.Fatal("empty model table missing placeholder row")
-	}
-	neg := savingsHTML(pxStats{ByModel: map[string]int64{"m": -5}, SavedPct: -5}, ugStats{}, 0)
-	if !strings.Contains(neg, `class="big warn"`) {
-		t.Fatal("negative reduction not marked warn")
+	if !strings.Contains(page, "/v0/management/fleet/savings") {
+		t.Fatal("savings shell must fetch key-gated JSON")
 	}
 }
 
@@ -304,8 +282,7 @@ func runSavingsJSON(t *testing.T) (map[string]any, error) {
 	t.Helper()
 	raw, err := json.Marshal(pluginapi.ManagementRequest{
 		Method: "GET",
-		Path:   "/savings",
-		Query:  url.Values{"format": {"json"}},
+		Path:   "/v0/management/fleet/savings",
 	})
 	if err != nil {
 		t.Fatal(err)

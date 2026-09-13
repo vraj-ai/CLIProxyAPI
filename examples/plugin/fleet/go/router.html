@@ -1,0 +1,61 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet router</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap" rel="stylesheet">
+<style>/*THEME*/</style></head><body>
+<div class="wrap">
+<header class="mast">
+  <div>
+    <div class="word">Fleet<em>.</em></div>
+    <p class="lede">Readiness and redacted decisions. Not live inference evidence.</p>
+  </div>
+  <nav class="nav" aria-label="surfaces">
+    <a href="/v0/resource/plugins/fleet/hub">Hub</a>
+    <a href="/v0/resource/plugins/fleet/savings">Savings</a>
+    <a href="/v0/resource/plugins/fleet/router" class="here">Router</a>
+    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
+    <a href="/management.html" target="_blank" rel="noopener">Console</a>
+  </nav>
+  <div class="keybox">
+    <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
+    <span class="hint" id="keyhint"></span>
+  </div>
+</header>
+<div id="lock"><div class="panel"><h2>Unlock router evidence</h2>
+  <p class="empty" style="margin:0">Decision JSON is key-gated. This URL is only an HTML shell.</p>
+</div></div>
+<div id="dash" hidden>
+<div class="board panel"><h2>Readiness</h2><pre class="mono" id="ready" style="white-space:pre-wrap;margin:0;font-size:12px"></pre></div>
+<div class="board panel"><h2>Decisions</h2><div id="decisions"></div></div>
+</div>
+</div>
+<script>
+const LS = "fleet.hub.key";
+const keyEl = document.getElementById("key");
+keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
+keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+async function refresh() {
+  document.getElementById("keyhint").textContent = "";
+  try {
+    const r = await fetch("/v0/management/fleet/router", { headers: { authorization: "Bearer " + keyEl.value } });
+    if (r.status === 401 || r.status === 403) throw Object.assign(new Error("bad key"), { auth: true });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+    document.getElementById("lock").hidden = true;
+    document.getElementById("dash").hidden = false;
+    document.getElementById("ready").textContent = JSON.stringify(s.readiness || {}, null, 2);
+    const dec = (s.decisions || []).slice().reverse();
+    document.getElementById("decisions").innerHTML = dec.length
+      ? dec.map(d => '<div class="cand"><span class="mono">' + esc(d.correlation_id) + ' · ' + esc(d.outcome) + '</span><span class="why">' + esc(d.reason || d.agent || "") + "</span></div>").join("")
+      : '<span class="empty">no router traffic yet</span>';
+  } catch (e) {
+    document.getElementById("lock").hidden = false;
+    document.getElementById("dash").hidden = true;
+    document.getElementById("keyhint").textContent = e.auth ? "required" : (e.message || "failed");
+  }
+}
+refresh();
+</script></body></html>

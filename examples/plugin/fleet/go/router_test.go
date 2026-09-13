@@ -151,7 +151,7 @@ func TestExecutorExecuteReturnsLeadResponse(t *testing.T) {
 		t.Fatalf("lead calls = %d", len(backend.calls))
 	}
 	call := backend.calls[0]
-	if !strings.Contains(call.Task, "say hi") || call.Agent != "w1B:p1" || call.CorrelationID == "" {
+	if !strings.Contains(call.Task, "say hi") || call.Agent != "pi" || call.CorrelationID == "" || call.ReadLines != defaultRouterReadLines {
 		t.Fatalf("lead request = %+v", call)
 	}
 	if completion["id"] != "chatcmpl-"+call.CorrelationID {

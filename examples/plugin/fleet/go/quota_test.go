@@ -56,6 +56,29 @@ func healthyQuota() map[string]providerQuota {
 // the normalizer consumes. Proves the wire schema, not a guess at it.
 const realOpenusageFixture = `{"errors":[],"generatedAt":"2026-09-12T16:45:27.328Z","providers":{"codex":{"displayName":"Codex","expiresAt":"2026-09-12T16:50:23.372Z","fetchedAt":"2026-09-12T16:45:23.372Z","plan":"Plus","resources":{"credits":{"available":0,"kind":"balance","unit":"credits"},"session":{"kind":"consumption","limit":100,"remaining":36,"resetsAt":"2026-09-12T19:37:27.000Z","unit":"percent","used":64,"utilization":0.64,"windowSeconds":18000},"weekly":{"kind":"consumption","limit":100,"remaining":79,"resetsAt":"2026-09-19T09:37:27.000Z","unit":"percent","used":21,"utilization":0.21,"windowSeconds":604800}},"stale":false},"grok":{"displayName":"Grok","expiresAt":"2026-09-12T16:50:22.857Z","fetchedAt":"2026-09-12T16:45:22.857Z","plan":"X Premium+","resources":{"weekly":{"kind":"consumption","limit":100,"remaining":94,"resetsAt":"2026-09-17T13:32:42.093Z","unit":"percent","used":6,"utilization":0.06,"windowSeconds":604800}},"stale":false},"openrouter":{"displayName":"OpenRouter","expiresAt":"2026-09-12T16:50:22.379Z","fetchedAt":"2026-09-12T16:45:22.379Z","plan":"Pay as you go","resources":{"balance":{"available":5.47,"kind":"balance","unit":"usd"}},"stale":false}},"schema":"openusage.limits.v1"}`
 
+func TestParseOpenusageCorruptExpiryIsStale(t *testing.T) {
+	snap, err := parseOpenusage([]byte(`{"schema":"openusage.limits.v1","providers":{"codex":{"plan":"Plus","fetchedAt":"nope","expiresAt":"also-nope","stale":false,"resources":{"weekly":{"kind":"consumption","limit":100,"remaining":80,"resetsAt":"bad","windowSeconds":604800}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap["codex"].Stale {
+		t.Fatal("corrupt timestamps must fail closed as stale")
+	}
+	if !snap["codex"].ExpiresAt.IsZero() {
+		t.Fatal("unparseable expiry must not become a real time")
+	}
+}
+
+func TestQuotaGateSortsResourceNames(t *testing.T) {
+	p := freshProviderAt(0, testNow)
+	p.Resources["session"] = quotaResource{Kind: "consumption", Remaining: 0, Limit: 100, ResetsAt: testNow.Add(time.Hour), WindowSeconds: 18000}
+	p.Resources["weekly"] = quotaResource{Kind: "consumption", Remaining: 0, Limit: 100, ResetsAt: testNow.Add(time.Hour), WindowSeconds: 604800}
+	got := quotaGate("codex", map[string]providerQuota{"codex": p}, testNow, false)
+	if got != "quota_exhausted:session" {
+		t.Fatalf("gate = %q, want sorted name session before weekly", got)
+	}
+}
+
 func TestParseRealOpenusage(t *testing.T) {
 	snap, err := parseOpenusage([]byte(realOpenusageFixture))
 	if err != nil {

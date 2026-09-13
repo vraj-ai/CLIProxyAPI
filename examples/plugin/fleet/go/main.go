@@ -31,7 +31,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -118,9 +117,10 @@ var state = struct {
 	decisions  []routeDecision
 	sentinels  []string
 	quotaCache struct {
-		at   time.Time
-		snap map[string]providerQuota
-		err  error
+		at       time.Time
+		snap     map[string]providerQuota
+		err      error
+		fetching bool
 	}
 }{}
 
@@ -317,6 +317,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case "management.register":
 		return okEnvelopeJSON(`{"routes":[
 			{"Method":"GET","Path":"/fleet/state"},
+			{"Method":"GET","Path":"/fleet/savings"},
+			{"Method":"GET","Path":"/fleet/router"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope/toggle"},
 			{"Method":"POST","Path":"/fleet/pxpipe/compression"}
@@ -442,14 +444,57 @@ type ugStats struct {
 	SavedPct float64 `json:"saved_pct"`
 }
 
-func savings(raw []byte) ([]byte, error) {
+var savingsMemo struct {
+	mu      sync.Mutex
+	pxKey   string
+	ugKey   string
+	px      pxStats
+	ug      ugStats
+}
+
+func fileKey(path string) string {
+	st, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", st.ModTime().UnixNano(), st.Size())
+}
+
+func savingsJSON() ([]byte, error) {
+	px, ug, inj, err := loadSavings()
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"pxpipe":                  px,
+		"subagent_context":        ug,
+		"injections_this_process": inj,
+		"note":                    "Historical local logs, not attributed to this proxy route. Character/byte reductions exclude image token cost and do not measure token or dollar savings. Injection counts record body edits, not model compliance or savings.",
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return okEnvelope(pluginapi.ManagementResponse{
+		StatusCode: http.StatusOK,
+		Headers:    http.Header{"Content-Type": []string{"application/json"}},
+		Body:       out,
+	})
+}
+
+func loadSavings() (pxStats, ugStats, int64, error) {
 	state.mu.Lock()
 	cfg := state.config
 	inj := state.injections
 	state.mu.Unlock()
-
-	var req pluginapi.ManagementRequest
-	_ = json.Unmarshal(raw, &req)
+	pxKey, ugKey := fileKey(cfg.PxpipeEvents), fileKey(cfg.UsageGain)
+	savingsMemo.mu.Lock()
+	if pxKey != "" && ugKey != "" && pxKey == savingsMemo.pxKey && ugKey == savingsMemo.ugKey {
+		px, ug := savingsMemo.px, savingsMemo.ug
+		savingsMemo.mu.Unlock()
+		return px, ug, inj, nil
+	}
+	savingsMemo.mu.Unlock()
 
 	px := pxStats{ByModel: map[string]int64{}}
 
@@ -474,10 +519,10 @@ func savings(raw []byte) ([]byte, error) {
 		errScan := sc.Err()
 		errClose := f.Close()
 		if errScan != nil || errClose != nil {
-			return nil, fmt.Errorf("telemetry read failed; measurements unavailable")
+			return pxStats{}, ugStats{}, 0, fmt.Errorf("telemetry read failed; measurements unavailable")
 		}
 	} else {
-		return nil, fmt.Errorf("telemetry unavailable; measurements not reported")
+		return pxStats{}, ugStats{}, 0, fmt.Errorf("telemetry unavailable; measurements not reported")
 	}
 	if px.CharsBefore > 0 {
 		px.SavedPct = float64(px.CharsBefore-px.CharsAfter) / float64(px.CharsBefore) * 100
@@ -499,34 +544,19 @@ func savings(raw []byte) ([]byte, error) {
 		errScan := sc.Err()
 		errClose := f.Close()
 		if errScan != nil || errClose != nil {
-			return nil, fmt.Errorf("telemetry read failed; measurements unavailable")
+			return pxStats{}, ugStats{}, 0, fmt.Errorf("telemetry read failed; measurements unavailable")
 		}
 	} else {
-		return nil, fmt.Errorf("telemetry unavailable; measurements not reported")
+		return pxStats{}, ugStats{}, 0, fmt.Errorf("telemetry unavailable; measurements not reported")
 	}
 	if ug.Before > 0 {
 		ug.SavedPct = float64(ug.Before-ug.After) / float64(ug.Before) * 100
 	}
-
-	payload := map[string]any{
-		"pxpipe":                  px,
-		"subagent_context":        ug,
-		"injections_this_process": inj,
-		"note":                    "Historical local logs, not attributed to this proxy route. Character/byte reductions exclude image token cost and do not measure token or dollar savings. Injection counts record body edits, not model compliance or savings.",
-	}
-	if req.Query.Get("format") == "json" {
-		out, _ := json.Marshal(payload)
-		return okEnvelope(pluginapi.ManagementResponse{
-			StatusCode: http.StatusOK,
-			Headers:    http.Header{"content-type": {"application/json"}},
-			Body:       out,
-		})
-	}
-	return okEnvelope(pluginapi.ManagementResponse{
-		StatusCode: http.StatusOK,
-		Headers:    http.Header{"content-type": {"text/html; charset=utf-8"}},
-		Body:       []byte(savingsHTML(px, ug, inj)),
-	})
+	savingsMemo.mu.Lock()
+	savingsMemo.pxKey, savingsMemo.ugKey = pxKey, ugKey
+	savingsMemo.px, savingsMemo.ug = px, ug
+	savingsMemo.mu.Unlock()
+	return px, ug, inj, nil
 }
 
 // modelRow is one line of the per-model reduction table.
@@ -558,109 +588,6 @@ func newSavingsView(px pxStats, ug ugStats, inj int64) savingsView {
 	return savingsView{Px: px, Ug: ug, Injections: inj, Models: models}
 }
 
-// savingsHTML renders the Fleet dashboard: stat cards for each measured
-// layer, the per-model table, and pxpipe's own dashboard embedded live.
-func savingsHTML(px pxStats, ug ugStats, inj int64) string {
-	v := newSavingsView(px, ug, inj)
-
-	var rows strings.Builder
-	if len(v.Models) == 0 {
-		rows.WriteString(`<tr><td colspan="2" class="empty">no compressed requests recorded</td></tr>`)
-	}
-	for _, m := range v.Models {
-		fmt.Fprintf(&rows, `<tr><td>%s</td><td class="num">%s</td></tr>`, html.EscapeString(m.Model), humanize(m.Reduced))
-	}
-
-	pxClass := "big"
-	if v.Px.SavedPct < 0 {
-		pxClass = "big warn"
-	}
-	ugClass := "big"
-	if v.Ug.SavedPct < 0 {
-		ugClass = "big warn"
-	}
-
-	return fmt.Sprintf(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fleet — savings</title>
-<style>
-  :root { --bg:#07090d; --panel:#0d1218; --panel2:#111821; --line:#1c242e; --line2:#26303c;
-          --text:#d7dde3; --muted:#67727f; --faint:#46505c;
-          --accent:#3fb950; --warn:#d29922; --link:#58a6ff;
-          --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace; }
-  * { box-sizing:border-box; }
-  html { background:var(--bg); }
-  body { background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,system-ui,sans-serif; margin:0;
-         background-image:radial-gradient(ellipse 90%% 50%% at 50%% -10%%, #0d1522 0%%, transparent 70%%); }
-  .top { max-width:1100px; margin:0 auto; padding:22px 24px 40px; }
-  :focus-visible { outline:2px solid var(--link); outline-offset:2px; border-radius:4px; }
-  .strip { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
-           padding-bottom:14px; border-bottom:1px solid var(--line); }
-  .wordmark { font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:.28em; color:var(--text); }
-  .wordmark .dotmark { color:var(--accent); }
-  .nav { display:flex; gap:2px; align-items:center; }
-  .nav a { font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--muted); text-decoration:none; padding:4px 10px; border-radius:4px; }
-  .nav a:hover { color:var(--text); background:var(--panel2); }
-  .nav a.here { color:var(--link); }
-  .note { color:var(--faint); font:11px var(--mono); margin:12px 0 0; max-width:72ch; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin:16px 0 12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px 18px;
-          box-shadow:0 1px 0 #ffffff05 inset, 0 12px 32px -18px #000; }
-  .card h2, .live h2 { font:600 10px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }
-  .big { font:700 26px var(--mono); color:var(--accent); font-variant-numeric:tabular-nums; }
-  .big.warn { color:var(--warn); }
-  .meta { font:11px var(--mono); color:var(--muted); margin-top:5px; }
-  table { width:100%%; font-size:13px; border-collapse:collapse; }
-  th { font:600 10px var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--faint); text-align:left; padding:0 8px 8px 0; }
-  td { padding:6px 8px 6px 0; border-top:1px solid var(--line); font-family:var(--mono); font-size:12px; }
-  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-  td.num { color:var(--accent); }
-  .empty { color:var(--faint); }
-  .live { margin-top:16px; }
-  .live h2 a { color:var(--link); text-transform:none; letter-spacing:.04em; }
-  iframe { display:block; width:100%%; height:62vh; min-height:420px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
-</style></head><body>
-<div class="top">
-<header class="strip">
-  <span class="wordmark">FLEET<span class="dotmark">·</span><span style="letter-spacing:.12em;font-size:11px;color:var(--muted);font-weight:400"> SAVINGS</span></span>
-  <nav class="nav" aria-label="surfaces">
-    <a href="/v0/resource/plugins/fleet/hub">hub</a>
-    <a href="/v0/resource/plugins/fleet/savings" class="here">savings</a>
-    <a href="/v0/resource/plugins/fleet/router">router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
-    <a href="/management.html" target="_blank" rel="noopener">console</a>
-    <a href="?format=json">json</a>
-  </nav>
-</header>
-<p class="note">historical local telemetry, not attributed to this route. text/byte reduction is not token or dollar savings; image token cost is excluded.</p>
-<div class="grid">
-  <div class="card"><h2>pxpipe compression</h2>
-    <div class="%s">%.1f%%</div>
-    <div class="meta">text chars reduced · %s requests · %s compressed · %s → %s</div>
-  </div>
-  <div class="card"><h2>subagent context</h2>
-    <div class="%s">%.1f%%</div>
-    <div class="meta">context bytes reduced · %d events · %s → %s</div>
-  </div>
-  <div class="card"><h2>instruction injection</h2>
-    <div class="big">%d</div>
-    <div class="meta">caveman + ponytail body edits this process · not model compliance or savings</div>
-  </div>
-</div>
-<div class="card">
-  <h2>text characters reduced by model</h2>
-  <table><tr><th>model</th><th class="num">chars reduced</th></tr>%s</table>
-</div>
-<div class="live">
-  <h2>pxpipe — live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener noreferrer">Open pxpipe ↗</a></h2>
-  <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
-</div>
-</div>
-</body></html>`,
-		pxClass, v.Px.SavedPct, humanize(v.Px.Requests), humanize(v.Px.Compressed), humanize(v.Px.CharsBefore), humanize(v.Px.CharsAfter),
-		ugClass, v.Ug.SavedPct, v.Ug.Events, humanize(v.Ug.Before), humanize(v.Ug.After),
-		v.Injections,
-		rows.String())
-}
 
 func humanize(n int64) string {
 	switch {

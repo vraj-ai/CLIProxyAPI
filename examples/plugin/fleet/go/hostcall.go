@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 	"unsafe"
 
 	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -77,4 +78,24 @@ var hostHTTP = func(req pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) 
 		return nil, fmt.Errorf("host http.do result decode: %w", err)
 	}
 	return &resp, nil
+}
+
+func hostHTTPTimeout(req pluginapi.HTTPRequest, d time.Duration) (*pluginapi.HTTPResponse, error) {
+	type result struct {
+		resp *pluginapi.HTTPResponse
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		r, e := hostHTTP(req)
+		ch <- result{r, e}
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case got := <-ch:
+		return got.resp, got.err
+	case <-t.C:
+		return nil, fmt.Errorf("host http timeout")
+	}
 }

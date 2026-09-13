@@ -12,7 +12,7 @@ import (
 func routerResource(t *testing.T) map[string]any {
 	t.Helper()
 	env := callMethod(t, "management.handle",
-		pluginapi.ManagementRequest{Method: "GET", Path: "/v0/resource/plugins/fleet/router"})
+		pluginapi.ManagementRequest{Method: "GET", Path: "/v0/management/fleet/router"})
 	if !env.OK {
 		t.Fatalf("env = %+v", env)
 	}
@@ -99,7 +99,7 @@ func TestRouterDiagnosticsRedactSentinels(t *testing.T) {
 	callMethod(t, pluginabi.MethodExecutorExecute,
 		execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
 	env := callMethod(t, "management.handle",
-		pluginapi.ManagementRequest{Method: "GET", Path: "/v0/resource/plugins/fleet/router"})
+		pluginapi.ManagementRequest{Method: "GET", Path: "/v0/management/fleet/router"})
 	if !env.OK {
 		t.Fatalf("env = %+v", env)
 	}

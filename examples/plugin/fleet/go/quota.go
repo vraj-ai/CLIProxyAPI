@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -82,8 +83,16 @@ func parseOpenusage(out []byte) (map[string]providerQuota, error) {
 	snap := make(map[string]providerQuota, len(doc.Providers))
 	for name, p := range doc.Providers {
 		pq := providerQuota{Plan: p.Plan, Stale: p.Stale, Resources: map[string]quotaResource{}}
-		pq.FetchedAt, _ = time.Parse(time.RFC3339, p.FetchedAt)
-		pq.ExpiresAt, _ = time.Parse(time.RFC3339, p.ExpiresAt)
+		if t, err := time.Parse(time.RFC3339, p.FetchedAt); err == nil {
+			pq.FetchedAt = t
+		}
+		if p.ExpiresAt == "" {
+			pq.Stale = true
+		} else if t, err := time.Parse(time.RFC3339, p.ExpiresAt); err != nil {
+			pq.Stale = true
+		} else {
+			pq.ExpiresAt = t
+		}
 		for rname, r := range p.Resources {
 			qr := quotaResource{Kind: r.Kind, Unit: r.Unit, WindowSeconds: r.WindowSeconds}
 			if r.Remaining != nil {
@@ -95,7 +104,14 @@ func parseOpenusage(out []byte) (map[string]providerQuota, error) {
 			if qr.Limit == 0 && r.Available != nil {
 				qr.Remaining = *r.Available
 			}
-			qr.ResetsAt, _ = time.Parse(time.RFC3339, r.ResetsAt)
+			if r.ResetsAt != "" {
+				t, err := time.Parse(time.RFC3339, r.ResetsAt)
+				if err != nil {
+					pq.Stale = true
+				} else {
+					qr.ResetsAt = t
+				}
+			}
 			pq.Resources[rname] = qr
 		}
 		snap[name] = pq
@@ -141,7 +157,13 @@ func quotaGate(sub string, snap map[string]providerQuota, now time.Time, approve
 		}
 		return "approval_required"
 	}
-	for name, r := range p.Resources {
+	names := make([]string, 0, len(p.Resources))
+	for name := range p.Resources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r := p.Resources[name]
 		if r.Kind != "consumption" {
 			continue
 		}
