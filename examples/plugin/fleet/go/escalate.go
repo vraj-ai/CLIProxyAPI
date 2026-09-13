@@ -67,15 +67,16 @@ func splitVerification(text string) (string, string) {
 		if l == "" {
 			continue
 		}
-		if !strings.HasPrefix(l, verifyMarker) {
+		idx := strings.LastIndex(l, verifyMarker)
+		if idx < 0 {
 			return text, ""
 		}
-		v := strings.TrimSpace(strings.TrimPrefix(l, verifyMarker))
-		rest := strings.TrimSpace(strings.Join(lines[:i], "\n"))
+		v := strings.TrimSpace(l[idx+len(verifyMarker):])
 		if v != "ok" && v != "failed" {
-			return rest, ""
+			return strings.TrimSpace(strings.Join(lines[:i], "\n")), ""
 		}
-		return rest, v
+		lines[i] = strings.TrimSpace(l[:idx])
+		return strings.TrimSpace(strings.Join(lines, "\n")), v
 	}
 	return text, ""
 }

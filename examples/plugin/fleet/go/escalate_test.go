@@ -245,4 +245,10 @@ func TestSplitVerification(t *testing.T) {
 	if text, v := splitVerification("answer\nCPA-VERIFY:garbage"); text != "answer" || v != "" {
 		t.Fatalf("%q %q", text, v)
 	}
+	if text, v := splitVerification("ok CPA-VERIFY:ok"); text != "ok" || v != "ok" {
+		t.Fatalf("inline marker: %q %q", text, v)
+	}
+	if text, v := splitVerification("line one\nline two CPA-VERIFY:failed"); text != "line one\nline two" || v != "failed" {
+		t.Fatalf("inline failed: %q %q", text, v)
+	}
 }

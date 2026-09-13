@@ -45,7 +45,7 @@ type cliQuota struct {
 }
 
 func defaultQuota() *cliQuota {
-	return &cliQuota{bin: "openusage", run: execRunner}
+	return &cliQuota{bin: resolveBin("openusage"), run: execRunner}
 }
 
 type openusageDoc struct {

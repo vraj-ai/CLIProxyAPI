@@ -313,6 +313,14 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return errorEnvelope("unsupported_capability", "cpa router does not report token counts"), nil
 	case pluginabi.MethodExecutorHTTPRequest:
 		return errorEnvelope("unsupported_capability", "cpa router does not serve raw http requests"), nil
+	case pluginabi.MethodAuthIdentifier:
+		return authIdentifier()
+	case pluginabi.MethodAuthParse:
+		return authParse(request)
+	case pluginabi.MethodAuthRefresh:
+		return authRefresh(request)
+	case pluginabi.MethodAuthLoginStart, pluginabi.MethodAuthLoginPoll:
+		return errorEnvelope("unsupported_capability", "fleet-router auth is file-based; no login flow"), nil
 	case "management.register":
 		return okEnvelopeJSON(`{"resources":[{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}]}`)
 	case "management.handle":
@@ -331,6 +339,7 @@ type registrationCapability struct {
 	RequestInterceptor    bool     `json:"request_interceptor"`
 	ManagementAPI         bool     `json:"management_api"`
 	ModelRegistrar        bool     `json:"model_registrar"`
+	AuthProvider          bool     `json:"auth_provider"`
 	Executor              bool     `json:"executor"`
 	ExecutorModelScope    string   `json:"executor_model_scope,omitempty"`
 	ExecutorInputFormats  []string `json:"executor_input_formats,omitempty"`
@@ -365,6 +374,7 @@ func buildRegistration() pluginRegistration {
 			RequestInterceptor:    true,
 			ManagementAPI:         true,
 			ModelRegistrar:        true,
+			AuthProvider:          true,
 			Executor:              true,
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeStatic),
 			ExecutorInputFormats:  []string{"openai"},

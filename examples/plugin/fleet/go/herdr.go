@@ -16,7 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -36,7 +38,25 @@ type cliHerdr struct {
 }
 
 func defaultHerdr() *cliHerdr {
-	return &cliHerdr{bin: "herdr", run: execRunner}
+	return &cliHerdr{bin: resolveBin("herdr"), run: execRunner}
+}
+
+// resolveBin locates a CLI the daemon's minimal launchd PATH may not expose.
+func resolveBin(name string) string {
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+		if path := filepath.Join(dir, name); fileExists(path) {
+			return path
+		}
+	}
+	return name
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func execRunner(ctx context.Context, argv ...string) ([]byte, error) {
