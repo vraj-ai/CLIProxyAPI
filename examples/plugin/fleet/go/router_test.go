@@ -151,7 +151,7 @@ func TestExecutorExecuteReturnsLeadResponse(t *testing.T) {
 		t.Fatalf("lead calls = %d", len(backend.calls))
 	}
 	call := backend.calls[0]
-	if call.Task != "say hi" || call.Agent != "w1B:p1" || call.CorrelationID == "" {
+	if !strings.Contains(call.Task, "say hi") || call.Agent != "w1B:p1" || call.CorrelationID == "" {
 		t.Fatalf("lead request = %+v", call)
 	}
 	if completion["id"] != "chatcmpl-"+call.CorrelationID {
@@ -208,14 +208,15 @@ func TestExecutorExecuteLeadFailureSurfaces(t *testing.T) {
 	}
 }
 
-func TestTaskTextShapes(t *testing.T) {
-	if got, err := taskText([]byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`)); err != nil || got != "a\nb" {
+func TestConversationTextShapes(t *testing.T) {
+	got, err := conversationText([]byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`))
+	if err != nil || !strings.Contains(got, "a\nb") {
 		t.Fatalf("array content: %q %v", got, err)
 	}
-	if _, err := taskText([]byte(`{"messages":[{"role":"assistant","content":"hi"}]}`)); err == nil {
-		t.Fatal("no user message did not error")
+	if _, err := conversationText([]byte(`{"messages":[{"role":"assistant","content":"hi"}]}`)); err != nil {
+		t.Fatalf("assistant-only conversation should serialize: %v", err)
 	}
-	if _, err := taskText([]byte(`{"input":[]}`)); err == nil {
+	if _, err := conversationText([]byte(`{"input":[]}`)); err == nil {
 		t.Fatal("missing messages did not error")
 	}
 }

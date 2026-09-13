@@ -176,7 +176,8 @@ func (h *cliHerdr) runLead(ctx context.Context, req leadRequest) (leadResult, er
 		return leadResult{}, routerErr("lead_result_unverified", "lead output did not contain the correlation markers", http.StatusBadGateway)
 	}
 	answer, verification := splitVerification(answer)
-	return leadResult{Text: answer, Agent: target.PaneID, Verification: verification}, nil
+	answer, calls := splitToolCalls(answer, req.CorrelationID)
+	return leadResult{Text: answer, Agent: target.PaneID, Verification: verification, ToolCalls: calls}, nil
 }
 
 var _ leadBackend = (*cliHerdr)(nil)

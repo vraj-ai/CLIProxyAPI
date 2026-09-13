@@ -58,7 +58,8 @@ type leadRequest struct {
 type leadResult struct {
 	Text         string
 	Agent        string
-	Verification string // "ok", "failed", or "" when unreported
+	Verification string     // "ok", "failed", or "" when unreported
+	ToolCalls    []toolCall // client-visible tool invocations, correlation-scoped ids
 }
 
 // leadBackend is the seam between the executor and the live orchestrator.
@@ -172,7 +173,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	if req.Model != virtualRouterModel {
 		return nil, routerErr("unsupported_model", fmt.Sprintf("cpa router executor only serves %q; got %q", virtualRouterModel, req.Model), http.StatusBadRequest)
 	}
-	task, err := taskText(req.Payload)
+	task, err := conversationText(req.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +215,7 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 	triggers := escalationTriggers(req, res)
 	if len(triggers) == 0 {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: sel.Chosen.Model, Outcome: "lead_completed", Agent: res.Agent, Effort: sel.Effort, Skipped: sel.Skipped})
-		return openaiCompletion(corr, res.Text), nil
+		return openaiCompletion(corr, res), nil
 	}
 	return escalate(ctx, backend, req, sel, quota, live, res, task, corr, triggers, time.Duration(timeout)*time.Millisecond)
 }
@@ -274,7 +275,7 @@ func escalate(ctx context.Context, backend leadBackend, req *executorCallRequest
 	base.Sidekick = side.Chosen.Label + "@" + side.Agent.PaneID
 	base.Skipped = append(base.Skipped, side.Skipped...)
 	recordDecision(base)
-	return openaiCompletion(corr, final.Text), nil
+	return openaiCompletion(corr, final), nil
 }
 
 func errCode(err error) string {
@@ -294,45 +295,6 @@ func routerErrorEnvelope(err error) []byte {
 // ---------------------------------------------------------------------------
 // request/response shaping
 
-// taskText pulls the user's request out of the openai chat payload. The
-// executor declares openai as its only input format, so the host translates
-// other client protocols before this point.
-func taskText(payload []byte) (string, error) {
-	var doc map[string]any
-	if err := json.Unmarshal(payload, &doc); err != nil || doc == nil {
-		return "", routerErr("bad_request", "executor payload is not a JSON object", http.StatusBadRequest)
-	}
-	msgs, ok := doc["messages"].([]any)
-	if !ok {
-		return "", routerErr("bad_request", "executor payload has no messages array", http.StatusBadRequest)
-	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m, ok := msgs[i].(map[string]any)
-		if !ok || m["role"] != "user" {
-			continue
-		}
-		switch c := m["content"].(type) {
-		case string:
-			if strings.TrimSpace(c) != "" {
-				return c, nil
-			}
-		case []any:
-			var parts []string
-			for _, p := range c {
-				if pm, ok := p.(map[string]any); ok {
-					if t, ok := pm["text"].(string); ok {
-						parts = append(parts, t)
-					}
-				}
-			}
-			if joined := strings.Join(parts, "\n"); strings.TrimSpace(joined) != "" {
-				return joined, nil
-			}
-		}
-	}
-	return "", routerErr("bad_request", "executor payload has no user message text", http.StatusBadRequest)
-}
-
 // extractMarked returns the text the lead framed between its result markers,
 // scanning from the end so an echoed prompt line cannot be mistaken for the
 // real answer.
@@ -351,7 +313,27 @@ func extractMarked(text, corr string) (string, bool) {
 	return out, out != ""
 }
 
-func openaiCompletion(corr, text string) []byte {
+// openaiCompletion preserves the client-visible contract: plain answers are
+// content + finish_reason "stop"; tool-call answers carry tool_calls with
+// correlation-scoped ids and finish_reason "tool_calls".
+func openaiCompletion(corr string, res leadResult) []byte {
+	msg := map[string]any{"role": "assistant", "content": res.Text}
+	finish := "stop"
+	if len(res.ToolCalls) > 0 {
+		var calls []any
+		for _, tc := range res.ToolCalls {
+			calls = append(calls, map[string]any{
+				"id":   tc.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      tc.Name,
+					"arguments": tc.Arguments,
+				},
+			})
+		}
+		msg["tool_calls"] = calls
+		finish = "tool_calls"
+	}
 	resp := map[string]any{
 		"id":      "chatcmpl-" + corr,
 		"object":  "chat.completion",
@@ -359,8 +341,8 @@ func openaiCompletion(corr, text string) []byte {
 		"model":   virtualRouterModel,
 		"choices": []any{map[string]any{
 			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": text},
-			"finish_reason": "stop",
+			"message":       msg,
+			"finish_reason": finish,
 		}},
 	}
 	raw, _ := json.Marshal(resp)
