@@ -2,10 +2,21 @@ package main
 
 import (
 	_ "embed"
+	"strings"
 )
+
+//go:embed theme.css
+var themeCSS string
 
 //go:embed hub.html
 var hubPageHTML string
 
-// keep the embed close to render so the asset lives in the binary but edits
-// stay in a real file.
+//go:embed savings.html
+var savingsPageHTML string
+
+//go:embed router.html
+var routerPageHTML string
+
+func withTheme(raw string) string {
+	return strings.Replace(raw, "/*THEME*/", themeCSS, 1)
+}

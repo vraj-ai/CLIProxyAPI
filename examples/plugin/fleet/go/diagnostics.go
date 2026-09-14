@@ -86,6 +86,7 @@ func readinessReport() map[string]any {
 		"orchestrator":        "herdr",
 		"quota_source":        "openusage --force (openusage.limits.v1)",
 		"policy_excluded":     excluded,
+		"client_cancel":       "plugin ABI has no mid-call cancel; a disconnect still consumes router_timeout_ms",
 	}
 }
 

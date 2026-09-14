@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -38,6 +39,7 @@ type hubProvider struct {
 	Disabled bool     `json:"disabled"`
 	Models   []string `json:"models"`
 	Detail   string   `json:"detail,omitempty"`
+	PatchKey string   `json:"patch_key,omitempty"`
 }
 
 type hubQuotaResource struct {
@@ -80,11 +82,11 @@ func servedModels(cfg hubConfig) []string {
 	if len(cfg.APIKeys) == 0 {
 		return nil
 	}
-	resp, err := hostHTTP(pluginapi.HTTPRequest{
+	resp, err := hostHTTPTimeout(pluginapi.HTTPRequest{
 		Method:  http.MethodGet,
 		URL:     "http://127.0.0.1:8317/v1/models",
 		Headers: http.Header{"authorization": []string{"Bearer " + cfg.APIKeys[0]}},
-	})
+	}, 3*time.Second)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}
@@ -201,7 +203,18 @@ func listAuthFiles() []authFileView {
 	return out
 }
 
-func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
+func maskAuthFile(name string) string {
+	at := strings.Index(name, "@")
+	if at >= 2 {
+		return name[:2] + "…@" + name[at+1:]
+	}
+	if strings.HasSuffix(name, ".json") {
+		return strings.TrimSuffix(name, ".json")
+	}
+	return name
+}
+
+func buildProviders(cfg hubConfig, auths []authFileView, routerEnabled bool) []hubProvider {
 	var out []hubProvider
 	excludedAll := map[string]bool{}
 	for p, pats := range cfg.OAuthExcluded {
@@ -221,7 +234,7 @@ func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
 		out = append(out, hubProvider{
 			Name: a.Provider, Kind: "oauth",
 			Disabled: a.Disabled || excludedAll[a.Provider],
-			Models:   models, Detail: a.File,
+			Models:   models, Detail: maskAuthFile(a.File), PatchKey: a.File,
 		})
 	}
 	for _, c := range cfg.Compat {
@@ -242,7 +255,7 @@ func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
 		})
 	}
 	out = append(out, hubProvider{
-		Name: routerProvider, Kind: "plugin", Disabled: !state.config.RouterEnabled,
+		Name: routerProvider, Kind: "plugin", Disabled: !routerEnabled,
 		Models: []string{virtualRouterModel}, Detail: "herdr-orchestrated virtual model",
 	})
 	return out
@@ -252,20 +265,33 @@ func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
 // polling page from hammering openusage's live refresh. Routing decisions
 // still fetch fresh per request.
 func quotaCached() (map[string]providerQuota, error) {
+	now := nowFunc()
 	state.mu.Lock()
-	if time.Since(state.quotaCache.at) < 15*time.Second {
+	age := now.Sub(state.quotaCache.at)
+	if !state.quotaCache.at.IsZero() && age >= 0 && age < 15*time.Second {
 		snap, err := state.quotaCache.snap, state.quotaCache.err
 		state.mu.Unlock()
 		return snap, err
 	}
+	if state.quotaCache.fetching {
+		snap, err := state.quotaCache.snap, state.quotaCache.err
+		state.mu.Unlock()
+		return snap, err
+	}
+	src := state.quota
+	state.quotaCache.fetching = true
 	state.mu.Unlock()
+	if src == nil {
+		src = defaultQuota()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	snap, err := state.quota.fetch(ctx)
+	snap, err := src.fetch(ctx)
 	state.mu.Lock()
 	state.quotaCache.at = nowFunc()
 	state.quotaCache.snap = snap
 	state.quotaCache.err = err
+	state.quotaCache.fetching = false
 	state.mu.Unlock()
 	return snap, err
 }
@@ -364,6 +390,8 @@ func pxpipeScope() ([]string, string) {
 	return []string{"claude-fable-5"}, "default"
 }
 
+var pxpipeScopeMu sync.Mutex
+
 func writePxpipeScope(models []string) error {
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, pxpipeConfigPath)
@@ -374,26 +402,53 @@ func writePxpipeScope(models []string) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "pxpipe-config-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func pxpipeBaseID(id string) string {
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+func inPxpipeScope(scope []string, served string) bool {
+	base := pxpipeBaseID(served)
+	for _, s := range scope {
+		if s == served || s == base || pxpipeBaseID(s) == base {
+			return true
+		}
+	}
+	return false
 }
 
 func pxpipeReachable() bool {
-	resp, err := hostHTTP(pluginapi.HTTPRequest{
+	resp, err := hostHTTPTimeout(pluginapi.HTTPRequest{
 		Method: http.MethodGet,
 		URL:    pxpipeProxyURL + "/api/stats.json",
-	})
+	}, 2*time.Second)
 	return err == nil && resp != nil && resp.StatusCode == http.StatusOK
 }
 
 func shimUp(cfg pluginConfig) bool {
-	resp, err := hostHTTP(pluginapi.HTTPRequest{
+	resp, err := hostHTTPTimeout(pluginapi.HTTPRequest{
 		Method: http.MethodGet,
 		URL:    strings.TrimRight(cfg.PxpipeURL, "/") + "/health",
-	})
+	}, 2*time.Second)
 	return err == nil && resp != nil && resp.StatusCode == http.StatusOK
 }
 
@@ -416,7 +471,7 @@ func buildHubState() hubState {
 			Router:   pluginCfg.RouterEnabled,
 			Pxpipe:   pluginCfg.PxpipeEnabled,
 		},
-		Providers: buildProviders(cfg, auths),
+		Providers: buildProviders(cfg, auths, pluginCfg.RouterEnabled),
 		Models:    servedModels(cfg),
 		Quota:     buildQuota(),
 		Router:    buildRouterView(live),
@@ -460,6 +515,8 @@ func pxpipeScopeSet(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return jsonResp(map[string]string{"error": "invalid_body"}, http.StatusBadRequest)
 	}
+	pxpipeScopeMu.Lock()
+	defer pxpipeScopeMu.Unlock()
 	before, _ := pxpipeScope()
 	if err := writePxpipeScope(req.Models); err != nil {
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusInternalServerError)
@@ -497,15 +554,18 @@ func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil || strings.TrimSpace(req.Model) == "" {
 		return jsonResp(map[string]string{"error": "invalid_body"}, http.StatusBadRequest)
 	}
+	pxpipeScopeMu.Lock()
+	defer pxpipeScopeMu.Unlock()
 	scope, _ := pxpipeScope()
 	set := map[string]bool{}
 	for _, m := range scope {
-		set[m] = true
+		set[pxpipeBaseID(m)] = true
 	}
+	key := pxpipeBaseID(req.Model)
 	if req.On {
-		set[req.Model] = true
+		set[key] = true
 	} else {
-		delete(set, req.Model)
+		delete(set, key)
 	}
 	next := make([]string, 0, len(set))
 	for m := range set {
@@ -515,8 +575,8 @@ func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusInternalServerError)
 	}
 	out := map[string]any{"scope": next, "persisted": true}
-	if err := pushPxpipeModel(req.Model, req.On); err != nil {
-		out["live_push_failed"] = []string{req.Model}
+	if err := pushPxpipeModel(key, req.On); err != nil {
+		out["live_push_failed"] = []string{key}
 	}
 	return jsonResp(out, http.StatusOK)
 }
@@ -538,28 +598,56 @@ func pushPxpipeModel(model string, on bool) error {
 	return nil
 }
 
-// managementDispatch routes both management (key-gated, full /v0/management
-// path) and resource (GET-only, /v0/resource/plugins/fleet path) requests.
-func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, error) {
-	path := strings.TrimRight(req.Path, "/")
+func htmlPage(body string) ([]byte, error) {
+	return okEnvelope(pluginapi.ManagementResponse{
+		StatusCode: http.StatusOK,
+		Headers:    http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:       []byte(body),
+	})
+}
+
+func fleetRelPath(path string) (kind, rel string) {
+	path = strings.TrimRight(path, "/")
+	const resourcePrefix = "/v0/resource/plugins/fleet"
+	const managementPrefix = "/v0/management"
 	switch {
-	case strings.HasSuffix(path, "/hub"):
-		return okEnvelope(pluginapi.ManagementResponse{
-			StatusCode: http.StatusOK,
-			Headers:    http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
-			Body:       []byte(hubPageHTML),
-		})
-	case strings.HasSuffix(path, "/router"):
-		return routerDiagnostics()
-	case strings.HasSuffix(path, "/savings"):
-		return savings(raw)
-	case strings.HasSuffix(path, "/fleet/state"):
+	case path == resourcePrefix:
+		return "resource", "/"
+	case strings.HasPrefix(path, resourcePrefix+"/"):
+		return "resource", strings.TrimPrefix(path, resourcePrefix)
+	case strings.HasPrefix(path, managementPrefix+"/"):
+		return "management", strings.TrimPrefix(path, managementPrefix)
+	case path == "/hub" || path == "/savings" || path == "/router":
+		return "resource", path
+	case strings.HasPrefix(path, "/fleet/"):
+		return "management", path
+	default:
+		return "", path
+	}
+}
+
+// managementDispatch routes resource HTML shells (unauthenticated) and
+// management JSON/writes (key-gated by the host) by exact registered path.
+func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, error) {
+	kind, rel := fleetRelPath(req.Path)
+	switch {
+	case kind == "resource" && rel == "/hub":
+		return htmlPage(withTheme(hubPageHTML))
+	case kind == "resource" && rel == "/savings":
+		return htmlPage(withTheme(savingsPageHTML))
+	case kind == "resource" && rel == "/router":
+		return htmlPage(withTheme(routerPageHTML))
+	case kind == "management" && rel == "/fleet/state":
 		return hubStateHandler()
-	case strings.HasSuffix(path, "/fleet/pxpipe/scope/toggle") && req.Method == http.MethodPost:
+	case kind == "management" && rel == "/fleet/savings":
+		return savingsJSON()
+	case kind == "management" && rel == "/fleet/router":
+		return routerDiagnostics()
+	case kind == "management" && rel == "/fleet/pxpipe/scope/toggle" && req.Method == http.MethodPost:
 		return pxpipeScopeToggle(req.Body)
-	case strings.HasSuffix(path, "/fleet/pxpipe/scope") && req.Method == http.MethodPost:
+	case kind == "management" && rel == "/fleet/pxpipe/scope" && req.Method == http.MethodPost:
 		return pxpipeScopeSet(req.Body)
-	case strings.HasSuffix(path, "/fleet/pxpipe/compression") && req.Method == http.MethodPost:
+	case kind == "management" && rel == "/fleet/pxpipe/compression" && req.Method == http.MethodPost:
 		return pxpipeCompression(req.Body)
 	}
 	return errorEnvelope("not_found", "no fleet handler for "+req.Method+" "+req.Path), nil

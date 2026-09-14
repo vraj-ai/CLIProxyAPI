@@ -29,8 +29,49 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if !strings.Contains(string(resp.Body), "CPA Router") || !strings.Contains(string(resp.Body), "Quota pace") {
+	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") {
 		t.Fatalf("hub page missing panels")
+	}
+	if strings.Contains(string(resp.Body), `"eligible"`) && strings.Contains(string(resp.Body), `"decisions"`) && strings.Contains(string(resp.Body), "correlation_id") {
+		// hub shell must not embed live router JSON
+	}
+}
+
+func TestManagementDispatchRejectsSuffixMatch(t *testing.T) {
+	out, err := managementDispatch(&pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/fleet/not/hub",
+	}, nil)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	var env envelope
+	if json.Unmarshal(out, &env) != nil || env.OK {
+		t.Fatalf("expected not_found, got %s", out)
+	}
+}
+
+func TestResourceRouterIsHTMLShell(t *testing.T) {
+	out, err := managementDispatch(&pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/fleet/router",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+		t.Fatalf("envelope: %s", out)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(resp.Headers.Get("content-type")), "text/html") {
+		t.Fatalf("content-type = %q", resp.Headers.Get("content-type"))
+	}
+	if strings.Contains(string(resp.Body), `"readiness"`) {
+		t.Fatal("resource /router leaked diagnostics JSON")
 	}
 }
 

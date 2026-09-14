@@ -1,0 +1,89 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet savings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap" rel="stylesheet">
+<style>/*THEME*/</style></head><body>
+<div class="wrap">
+<header class="mast">
+  <div>
+    <div class="word">Fleet<em>.</em></div>
+    <p class="lede">Compression telemetry. Text reduction is not token or dollar savings.</p>
+  </div>
+  <nav class="nav" aria-label="surfaces">
+    <a href="/v0/resource/plugins/fleet/hub">Hub</a>
+    <a href="/v0/resource/plugins/fleet/savings" class="here">Savings</a>
+    <a href="/v0/resource/plugins/fleet/router">Router</a>
+    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
+    <a href="/management.html" target="_blank" rel="noopener">Console</a>
+  </nav>
+  <div class="keybox">
+    <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
+    <span class="hint" id="keyhint"></span>
+  </div>
+</header>
+<div id="lock"><div class="panel"><h2>Unlock savings</h2>
+  <p class="empty" style="margin:0">The numbers live behind the management key. This page is only a shell.</p>
+</div></div>
+<div id="dash" hidden>
+<div class="split board">
+  <div class="panel"><h2>pxpipe compression</h2><div class="big" id="pxpct"></div><div class="meta" id="pxmeta"></div></div>
+  <div class="panel"><h2>subagent context</h2><div class="big" id="ugpct"></div><div class="meta" id="ugmeta"></div></div>
+  <div class="panel"><h2>instruction injection</h2><div class="big" id="inj"></div><div class="meta">body edits this process · not model compliance</div></div>
+</div>
+<div class="board panel">
+  <h2>text characters reduced by model</h2>
+  <table class="rows"><thead><tr><th>model</th><th>chars reduced</th></tr></thead><tbody id="models"></tbody></table>
+</div>
+<div class="board panel">
+  <h2>pxpipe live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener">open in tab</a></h2>
+  <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
+</div>
+</div>
+</div>
+<div id="toast"></div>
+<script>
+const LS = "fleet.hub.key";
+const keyEl = document.getElementById("key");
+keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
+keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function humanize(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n/1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n/1e3).toFixed(1) + "k";
+  return String(n);
+}
+async function refresh() {
+  document.getElementById("keyhint").textContent = "";
+  try {
+    const r = await fetch("/v0/management/fleet/savings", { headers: { authorization: "Bearer " + keyEl.value } });
+    if (r.status === 401 || r.status === 403) throw Object.assign(new Error("bad key"), { auth: true });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+    const px = s.pxpipe || {}, ug = s.subagent_context || {};
+    document.getElementById("lock").hidden = true;
+    document.getElementById("dash").hidden = false;
+    const pxEl = document.getElementById("pxpct");
+    pxEl.textContent = (px.saved_pct || 0).toFixed(1) + "%";
+    pxEl.className = "big" + ((px.saved_pct || 0) < 0 ? " warn" : "");
+    document.getElementById("pxmeta").textContent = humanize(px.requests) + " requests · " + humanize(px.compressed) + " compressed · " + humanize(px.chars_before) + " → " + humanize(px.chars_after);
+    const ugEl = document.getElementById("ugpct");
+    ugEl.textContent = (ug.saved_pct || 0).toFixed(1) + "%";
+    ugEl.className = "big" + ((ug.saved_pct || 0) < 0 ? " warn" : "");
+    document.getElementById("ugmeta").textContent = (ug.events || 0) + " events · " + humanize(ug.bytes_before) + " → " + humanize(ug.bytes_after);
+    document.getElementById("inj").textContent = s.injections_this_process || 0;
+    const by = px.saved_chars_by_model || {};
+    const rows = Object.keys(by).sort((a,b) => by[b]-by[a] || a.localeCompare(b));
+    document.getElementById("models").innerHTML = rows.length
+      ? rows.map(m => "<tr><td>" + esc(m) + '</td><td class="mono">' + humanize(by[m]) + "</td></tr>").join("")
+      : '<tr><td class="empty" colspan="2">no compressed requests recorded</td></tr>';
+  } catch (e) {
+    document.getElementById("lock").hidden = false;
+    document.getElementById("dash").hidden = true;
+    document.getElementById("keyhint").textContent = e.auth ? "required" : (e.message || "failed");
+  }
+}
+refresh();
+</script></body></html>

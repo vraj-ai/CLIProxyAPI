@@ -53,6 +53,7 @@ type leadRequest struct {
 	Model         string
 	Effort        string
 	Deadline      time.Duration
+	ReadLines     int
 }
 
 type leadResult struct {
@@ -204,14 +205,23 @@ func routeToLead(req *executorCallRequest) ([]byte, error) {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err)})
 		return nil, err
 	}
+	agent := sel.Agent.PaneID
+	if cfg.RouterAgent != "" {
+		agent = cfg.RouterAgent
+	}
+	readLines := cfg.RouterReadLines
+	if readLines <= 0 {
+		readLines = defaultRouterReadLines
+	}
 	res, err := backend.runLead(ctx, leadRequest{
 		CorrelationID: corr,
-		Agent:         sel.Agent.PaneID,
+		Agent:         agent,
 		Role:          roleLead,
 		Task:          task,
 		Model:         sel.Chosen.Model,
 		Effort:        sel.Effort,
 		Deadline:      time.Duration(timeout) * time.Millisecond,
+		ReadLines:     readLines,
 	})
 	if err != nil {
 		recordDecision(routeDecision{CorrelationID: corr, At: time.Now().UTC().Format(time.RFC3339), Model: req.Model, Outcome: "failed", Reason: errCode(err), Agent: sel.Agent.PaneID, Effort: sel.Effort, Skipped: sel.Skipped})
