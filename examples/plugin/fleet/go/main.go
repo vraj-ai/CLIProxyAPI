@@ -278,7 +278,14 @@ func marshalDoc(doc map[string]any) ([]byte, bool) {
 // ---------------------------------------------------------------------------
 // rpc dispatch
 
-func handleMethod(method string, request []byte) ([]byte, error) {
+// handleMethod recovers panics: a panic crossing the cgo boundary aborts the
+// whole host process, not just this call.
+func handleMethod(method string, request []byte) (out []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, fmt.Errorf("panic in %s: %v", method, r)
+		}
+	}()
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		if err := configure(request); err != nil {
