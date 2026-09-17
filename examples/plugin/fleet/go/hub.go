@@ -281,6 +281,11 @@ func quotaCached() (map[string]providerQuota, error) {
 	src := state.quota
 	state.quotaCache.fetching = true
 	state.mu.Unlock()
+	defer func() {
+		state.mu.Lock()
+		state.quotaCache.fetching = false
+		state.mu.Unlock()
+	}()
 	if src == nil {
 		src = defaultQuota()
 	}
@@ -291,7 +296,6 @@ func quotaCached() (map[string]providerQuota, error) {
 	state.quotaCache.at = nowFunc()
 	state.quotaCache.snap = snap
 	state.quotaCache.err = err
-	state.quotaCache.fetching = false
 	state.mu.Unlock()
 	return snap, err
 }
