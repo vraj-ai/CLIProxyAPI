@@ -9,8 +9,9 @@ and issues OpenRouter-style API keys for the models this proxy serves.
 - `request_interceptor` — prepends caveman/ponytail text to the request's
   system context (OpenAI `messages`, Anthropic `system`, Responses
   `instructions` shapes all handled). Terminates completions whose model
-  is outside the calling key's grant.
-- `response_interceptor` — filters `/v1/models` to the calling key's grant.
+  is outside the calling key's grant, and 404s unusable ocg muse-spark ids.
+- `response_interceptor` — filters `/v1/models` to the calling key's grant
+  and drops unusable compatibility ids.
 - `management_api` — registers Fleet Hub, Keys, Savings, and Router. Keys
   JSON is key-gated at `/v0/management/fleet/keys`. The Keys HTML shell is
   `/v0/resource/plugins/fleet/keys`. Grants live in
