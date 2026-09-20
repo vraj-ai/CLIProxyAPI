@@ -134,6 +134,7 @@ type hubState struct {
 	Quota       []hubQuotaProvider `json:"quota"`
 	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
+	Keys        []publicGrant      `json:"keys"`
 }
 
 // hubConfig mirrors the config.yaml fields the hub reads. apiKeys is consumed
@@ -488,6 +489,7 @@ func buildHubState() hubState {
 			ShimEnabled: pluginCfg.PxpipeEnabled,
 			ShimUp:      shimUp(pluginCfg),
 		},
+		Keys: publicGrantsForHub(),
 	}
 }
 
@@ -621,7 +623,7 @@ func fleetRelPath(path string) (kind, rel string) {
 		return "resource", strings.TrimPrefix(path, resourcePrefix)
 	case strings.HasPrefix(path, managementPrefix+"/"):
 		return "management", strings.TrimPrefix(path, managementPrefix)
-	case path == "/hub" || path == "/savings" || path == "/router":
+	case path == "/hub" || path == "/savings" || path == "/router" || path == "/keys":
 		return "resource", path
 	case strings.HasPrefix(path, "/fleet/"):
 		return "management", path
@@ -641,6 +643,8 @@ func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, e
 		return htmlPage(withTheme(savingsPageHTML))
 	case kind == "resource" && rel == "/router":
 		return htmlPage(withTheme(routerPageHTML))
+	case kind == "resource" && rel == "/keys":
+		return htmlPage(withTheme(keysPageHTML))
 	case kind == "management" && rel == "/fleet/state":
 		return hubStateHandler()
 	case kind == "management" && rel == "/fleet/savings":
@@ -653,6 +657,16 @@ func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, e
 		return pxpipeScopeSet(req.Body)
 	case kind == "management" && rel == "/fleet/pxpipe/compression" && req.Method == http.MethodPost:
 		return pxpipeCompression(req.Body)
+	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodGet:
+		return keysListHandler(req)
+	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodPost:
+		return keysCreateHandler(req)
+	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodPatch:
+		return keysPatchHandler(req)
+	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodDelete:
+		return keysDeleteHandler(req)
+	case kind == "management" && rel == "/fleet/keys/adopt" && req.Method == http.MethodPost:
+		return keysAdoptHandler(req)
 	}
 	return errorEnvelope("not_found", "no fleet handler for "+req.Method+" "+req.Path), nil
 }

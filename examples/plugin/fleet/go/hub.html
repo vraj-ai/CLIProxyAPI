@@ -12,6 +12,7 @@
   </div>
   <nav class="nav" aria-label="surfaces">
     <a href="/v0/resource/plugins/fleet/hub" class="here">Hub</a>
+    <a href="/v0/resource/plugins/fleet/keys">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings">Savings</a>
     <a href="/v0/resource/plugins/fleet/router">Router</a>
     <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
@@ -48,6 +49,9 @@
 <div class="board panel"><h2>pxpipe scope<span>lit chips get the transform hop</span></h2>
   <input class="search" id="mfilter" placeholder="filter models" aria-label="filter models">
   <div class="chips" id="models" style="margin-top:12px"></div>
+</div>
+<div class="board panel"><h2>Keys<span>OpenRouter-style grants · <a href="/v0/resource/plugins/fleet/keys">open</a></span></h2>
+  <div id="keys"></div>
 </div>
 <div class="board panel"><h2>Flags</h2>
   <div class="flags" id="flags"></div>
@@ -195,6 +199,19 @@ async function setFlag(key, val, el) {
     toast(key + " = " + val); refresh();
   } catch (e) { toast(e.message, "err"); refresh(); }
 }
+function renderKeys(s) {
+  const el = document.getElementById("keys");
+  const rows = s.keys || [];
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty">No fleet keys yet. <a href="/v0/resource/plugins/fleet/keys">Mint one</a> to hand a client this catalog.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(k =>
+    '<div class="lbl"><span class="mono">' + esc(k.name || "untitled") + ' · ' + esc(k.prefix) + '</span><span>' +
+    (k.disabled ? '<span class="badge bad">disabled</span>' : (k.mode === "all" ? '<span class="badge ok">all enabled</span>' : '<span class="badge">' + (k.models || []).length + ' models</span>')) +
+    "</span></div>"
+  ).join("");
+}
 function renderFlags(s) {
   const f = s.flags;
   const rows = [["caveman", "caveman", f.caveman, "compressed replies"], ["ponytail", "ponytail", f.ponytail, "lazy solutions"], ["router", "router_enabled", f.router, "cpa router"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop"]];
@@ -210,7 +227,7 @@ async function refresh() {
     window.__state = s;
     document.getElementById("lock").hidden = true;
     document.getElementById("dash").hidden = false;
-    renderPipe(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderFlags(s);
+    renderPipe(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
     document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString() + " · auto-refresh 15s";
   } catch (e) {
     if (e.auth) {

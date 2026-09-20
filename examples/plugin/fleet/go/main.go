@@ -295,12 +295,9 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 	case pluginabi.MethodRequestInterceptBefore:
 		return intercept(request)
 	case pluginabi.MethodRequestInterceptAfter:
-		// body may already be translated here; injection happens once, before
-		var req pluginapi.RequestInterceptRequest
-		if err := json.Unmarshal(request, &req); err != nil {
-			return nil, err
-		}
-		return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+		return interceptAfter(request)
+	case pluginabi.MethodResponseInterceptAfter:
+		return interceptModelsResponse(request)
 	case pluginabi.MethodModelRegister:
 		return okEnvelope(modelRegistration())
 	case pluginabi.MethodExecutorIdentifier:
@@ -326,11 +323,17 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 			{"Method":"GET","Path":"/fleet/state"},
 			{"Method":"GET","Path":"/fleet/savings"},
 			{"Method":"GET","Path":"/fleet/router"},
+			{"Method":"GET","Path":"/fleet/keys"},
+			{"Method":"POST","Path":"/fleet/keys"},
+			{"Method":"PATCH","Path":"/fleet/keys"},
+			{"Method":"DELETE","Path":"/fleet/keys"},
+			{"Method":"POST","Path":"/fleet/keys/adopt"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope/toggle"},
 			{"Method":"POST","Path":"/fleet/pxpipe/compression"}
 		],"resources":[
 			{"Path":"/hub","Menu":"Fleet Hub","Description":"Unified control plane — quota pace, cpa router, providers, models, pxpipe scope, and fleet flags."},
+			{"Path":"/keys","Menu":"Fleet Keys","Description":"Mint OpenRouter-style API keys for the models this proxy currently serves."},
 			{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},
 			{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}
 		]}`)
@@ -345,6 +348,7 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 
 type registrationCapability struct {
 	RequestInterceptor    bool     `json:"request_interceptor"`
+	ResponseInterceptor   bool     `json:"response_interceptor"`
 	ManagementAPI         bool     `json:"management_api"`
 	ModelRegistrar        bool     `json:"model_registrar"`
 	AuthProvider          bool     `json:"auth_provider"`
@@ -382,6 +386,7 @@ func buildRegistration() pluginRegistration {
 		},
 		Capabilities: registrationCapability{
 			RequestInterceptor:    true,
+			ResponseInterceptor:   true,
 			ManagementAPI:         true,
 			ModelRegistrar:        true,
 			AuthProvider:          true,
@@ -398,6 +403,16 @@ func intercept(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	if !grantAllowsRequest(extractAPIKey(req.Headers), req.Model, req.RequestedModel) {
+		return okEnvelope(pluginapi.RequestInterceptResponse{
+			Headers:         req.Headers,
+			Body:            req.Body,
+			Terminate:       true,
+			StatusCode:      http.StatusForbidden,
+			ResponseHeaders: http.Header{"Content-Type": []string{"application/json"}},
+			ResponseBody:    deniedModelBody,
+		})
+	}
 	state.mu.Lock()
 	cfg := state.config
 	state.mu.Unlock()
@@ -411,6 +426,37 @@ func intercept(raw []byte) ([]byte, error) {
 		}
 	}
 	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: body})
+}
+
+func interceptAfter(raw []byte) ([]byte, error) {
+	var req pluginapi.RequestInterceptRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	if !grantAllowsRequest(extractAPIKey(req.Headers), req.Model, req.RequestedModel) {
+		return okEnvelope(pluginapi.RequestInterceptResponse{
+			Headers:         req.Headers,
+			Body:            req.Body,
+			Terminate:       true,
+			StatusCode:      http.StatusForbidden,
+			ResponseHeaders: http.Header{"Content-Type": []string{"application/json"}},
+			ResponseBody:    deniedModelBody,
+		})
+	}
+	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+}
+
+func interceptModelsResponse(raw []byte) ([]byte, error) {
+	var req pluginapi.ResponseInterceptRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	body := req.Body
+	g, err := grantForSecret(extractAPIKey(req.RequestHeaders))
+	if err == nil && g != nil {
+		body = filterModelList(req.Body, func(id string) bool { return catalogAllows(g, id) })
+	}
+	return okEnvelope(pluginapi.ResponseInterceptResponse{Headers: req.ResponseHeaders, Body: body})
 }
 
 // ---------------------------------------------------------------------------
@@ -452,11 +498,11 @@ type ugStats struct {
 }
 
 var savingsMemo struct {
-	mu      sync.Mutex
-	pxKey   string
-	ugKey   string
-	px      pxStats
-	ug      ugStats
+	mu    sync.Mutex
+	pxKey string
+	ugKey string
+	px    pxStats
+	ug    ugStats
 }
 
 func fileKey(path string) string {
@@ -594,7 +640,6 @@ func newSavingsView(px pxStats, ug ugStats, inj int64) savingsView {
 	})
 	return savingsView{Px: px, Ug: ug, Injections: inj, Models: models}
 }
-
 
 func humanize(n int64) string {
 	switch {

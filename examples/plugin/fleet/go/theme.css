@@ -160,3 +160,29 @@ foot, footer { color: var(--faint); font-size: 12px; margin-top: 18px; display: 
 .big.warn { color: var(--bad); }
 .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
 iframe { display: block; width: 100%; height: 62vh; min-height: 420px; border: 1px solid var(--line); border-radius: 12px; background: #0d0b09; }
+.btn {
+  background: var(--well); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 12px; font: 13px var(--sans); cursor: pointer;
+}
+.btn:hover { border-color: var(--lamp); color: var(--lamp); }
+.btn.lampish { background: #e4b15a22; border-color: var(--lamp); color: var(--lamp); }
+.btn.danger { color: var(--bad); border-color: #e25b4a55; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.field { display: block; color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.field input { display: block; margin-top: 6px; }
+.modes { display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+.mode { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.ticket .stub {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--well); border: 1px dashed var(--lamp); border-radius: 12px;
+  padding: 12px 14px; margin: 10px 0;
+}
+.ticket .stub code {
+  font: 13px var(--mono); color: var(--lamp); word-break: break-all; flex: 1;
+}
+.kcard {
+  background: var(--well); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; margin-top: 10px;
+}
+.khead { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.kact { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
