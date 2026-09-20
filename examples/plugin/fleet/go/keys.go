@@ -248,14 +248,18 @@ func extractBearer(header string) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func extractAPIKey(h http.Header) string {
-	if h == nil {
-		return ""
+func extractAPIKey(h http.Header, meta map[string]any) string {
+	candidates := []string{}
+	if h != nil {
+		candidates = append(candidates,
+			extractBearer(h.Get("Authorization")),
+			strings.TrimSpace(h.Get("X-Goog-Api-Key")),
+			strings.TrimSpace(h.Get("X-Api-Key")),
+		)
 	}
-	candidates := []string{
-		extractBearer(h.Get("Authorization")),
-		strings.TrimSpace(h.Get("X-Goog-Api-Key")),
-		strings.TrimSpace(h.Get("X-Api-Key")),
+	candidates = append(candidates, metadataStrings(meta, "userApiKey", "api_key", "key", "auth_token")...)
+	if q := metadataMap(meta, "query"); q != nil {
+		candidates = append(candidates, metadataStrings(q, "key", "auth_token")...)
 	}
 	for _, c := range candidates {
 		if c != "" {
@@ -265,9 +269,32 @@ func extractAPIKey(h http.Header) string {
 	return ""
 }
 
+func metadataMap(meta map[string]any, key string) map[string]any {
+	if meta == nil {
+		return nil
+	}
+	m, _ := meta[key].(map[string]any)
+	return m
+}
+
+func metadataStrings(meta map[string]any, keys ...string) []string {
+	if meta == nil {
+		return nil
+	}
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		s, _ := meta[key].(string)
+		out = append(out, strings.TrimSpace(s))
+	}
+	return out
+}
+
 func grantAllowsRequest(secret, model, requested string) bool {
 	g, err := grantForSecret(secret)
-	if err != nil || g == nil {
+	if err != nil {
+		return false
+	}
+	if g == nil {
 		return true
 	}
 	if g.Disabled {
@@ -292,16 +319,25 @@ func filterModelList(body []byte, allow func(string) bool) []byte {
 	if json.Unmarshal(body, &doc) != nil {
 		return body
 	}
+	if obj, _ := doc["object"].(string); obj != "list" {
+		return body
+	}
 	data, ok := doc["data"].([]any)
 	if !ok {
 		return body
 	}
+	for _, item := range data {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return body
+		}
+		if _, ok := row["id"].(string); !ok {
+			return body
+		}
+	}
 	kept := make([]any, 0, len(data))
 	for _, item := range data {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
+		obj := item.(map[string]any)
 		id, _ := obj["id"].(string)
 		if allow(id) {
 			kept = append(kept, obj)

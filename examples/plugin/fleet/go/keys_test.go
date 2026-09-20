@@ -91,10 +91,26 @@ func TestCorruptGrantStore(t *testing.T) {
 	if _, err := loadGrantStore(); err == nil {
 		t.Fatal("corrupt store must error")
 	}
-	if !grantAllowsRequest("sk-flt-deadbeefdeadbeefdeadbeefdeadbeef", "openai/gpt-6-astra", "") {
-		t.Fatal("corrupt store must fail open for enforcement")
+	if grantAllowsRequest("sk-flt-deadbeefdeadbeefdeadbeefdeadbeef", "openai/gpt-6-astra", "") {
+		t.Fatal("corrupt store must fail closed for enforcement")
 	}
 	_ = os.Remove(grantFilePath())
+}
+
+func TestExtractAPIKeyFromQueryMetadata(t *testing.T) {
+	secret := "sk-flt-queryqueryqueryqueryqueryqueryquery"
+	got := extractAPIKey(nil, map[string]any{"query": map[string]any{"key": secret}})
+	if got != secret {
+		t.Fatalf("query key = %q", got)
+	}
+}
+
+func TestFilterModelListLeavesEmbeddings(t *testing.T) {
+	body := []byte(`{"object":"list","data":[{"embedding":[0.1],"index":0},{"embedding":[0.2],"index":1}]}`)
+	out := filterModelList(body, func(string) bool { return false })
+	if string(out) != string(body) {
+		t.Fatalf("embeddings mutated: %s", out)
+	}
 }
 
 func TestModelsFilter(t *testing.T) {

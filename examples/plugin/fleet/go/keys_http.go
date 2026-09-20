@@ -124,31 +124,27 @@ func keysCreateHandler(req *pluginapi.ManagementRequest) ([]byte, error) {
 		g.Name = "untitled"
 	}
 	grantsMu.Lock()
+	defer grantsMu.Unlock()
 	store, err := loadGrantStore()
 	if err != nil {
-		grantsMu.Unlock()
 		return jsonResp(map[string]string{"error": "grant_store_unreadable"}, http.StatusInternalServerError)
 	}
 	store.Grants = append(store.Grants, g)
 	if err := saveGrantStore(store); err != nil {
-		grantsMu.Unlock()
 		return jsonResp(map[string]string{"error": "grant_store_write"}, http.StatusInternalServerError)
 	}
-	grantsMu.Unlock()
-
 	proxyKeys, err := listProxyKeys(req.Headers)
 	if err != nil {
-		_ = deleteGrant(g.ID)
+		_ = deleteGrantLocked(g.ID)
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusBadGateway)
 	}
 	next := append(append([]string{}, proxyKeys...), secret)
 	if err := putProxyKeys(req.Headers, next); err != nil {
-		_ = deleteGrant(g.ID)
+		_ = deleteGrantLocked(g.ID)
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusBadGateway)
 	}
-	live := hashSet(next)
 	return jsonResp(map[string]any{
-		"key":    publicFromGrant(g, live),
+		"key":    publicFromGrant(g, hashSet(next)),
 		"secret": secret,
 	}, http.StatusOK)
 }
@@ -218,9 +214,9 @@ func keysDeleteHandler(req *pluginapi.ManagementRequest) ([]byte, error) {
 		return jsonResp(map[string]string{"error": "missing_id"}, http.StatusBadRequest)
 	}
 	grantsMu.Lock()
+	defer grantsMu.Unlock()
 	store, err := loadGrantStore()
 	if err != nil {
-		grantsMu.Unlock()
 		return jsonResp(map[string]string{"error": "grant_store_unreadable"}, http.StatusInternalServerError)
 	}
 	var target *fleetKeyGrant
@@ -231,7 +227,6 @@ func keysDeleteHandler(req *pluginapi.ManagementRequest) ([]byte, error) {
 			break
 		}
 	}
-	grantsMu.Unlock()
 	if target == nil {
 		return jsonResp(map[string]string{"error": "not_found"}, http.StatusNotFound)
 	}
@@ -249,7 +244,7 @@ func keysDeleteHandler(req *pluginapi.ManagementRequest) ([]byte, error) {
 	if err := putProxyKeys(req.Headers, next); err != nil {
 		return jsonResp(map[string]string{"error": err.Error()}, http.StatusBadGateway)
 	}
-	if err := deleteGrant(id); err != nil {
+	if err := deleteGrantLocked(id); err != nil {
 		return jsonResp(map[string]string{"error": "grant_store_write"}, http.StatusInternalServerError)
 	}
 	return jsonResp(map[string]any{"revoked": id}, http.StatusOK)
@@ -317,6 +312,10 @@ func keysAdoptHandler(req *pluginapi.ManagementRequest) ([]byte, error) {
 func deleteGrant(id string) error {
 	grantsMu.Lock()
 	defer grantsMu.Unlock()
+	return deleteGrantLocked(id)
+}
+
+func deleteGrantLocked(id string) error {
 	store, err := loadGrantStore()
 	if err != nil {
 		return err
