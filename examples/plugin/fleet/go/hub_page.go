@@ -17,6 +17,9 @@ var savingsPageHTML string
 //go:embed router.html
 var routerPageHTML string
 
+//go:embed keys.html
+var keysPageHTML string
+
 func withTheme(raw string) string {
 	return strings.Replace(raw, "/*THEME*/", themeCSS, 1)
 }

@@ -606,6 +606,18 @@ func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model st
 			HTTPStatus: http.StatusServiceUnavailable,
 		}, terminalCause)
 	}
+	return wrapUnavailable(lastCandidateErr)
+}
+
+// wrapUnavailable is the fallback when no ready auth remains. An upstream 5xx
+// already proved a credential was selected; keep that status instead of
+// relabeling the failure as missing auth.
+func wrapUnavailable(lastCandidateErr error) error {
+	if lastCandidateErr != nil {
+		if status := statusCodeFromError(lastCandidateErr); status >= http.StatusInternalServerError {
+			return lastCandidateErr
+		}
+	}
 	return WithCause(&Error{Code: "auth_unavailable", Message: "no auth available"}, lastCandidateErr)
 }
 
@@ -1279,7 +1291,7 @@ func (m *modelScheduler) unavailableErrorLocked(provider, model string, predicat
 			HTTPStatus: http.StatusServiceUnavailable,
 		}, terminalCause)
 	}
-	return WithCause(&Error{Code: "auth_unavailable", Message: "no auth available"}, lastCandidateErr)
+	return wrapUnavailable(lastCandidateErr)
 }
 
 func (m *modelScheduler) latestCandidateErrorWithTimeLocked(model string, predicate func(*scheduledAuth) bool) (error, time.Time, string) {

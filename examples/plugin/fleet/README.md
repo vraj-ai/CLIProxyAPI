@@ -1,16 +1,22 @@
 # Fleet Plugin
 
 vraj's fleet plugin: injects caveman + ponytail instructions into every
-routed request, and serves a `/savings` management resource aggregating
-pxpipe + pi-subagents compression telemetry.
+routed request, serves the fleet switchboard (hub, keys, savings, router),
+and issues OpenRouter-style API keys for the models this proxy serves.
 
 ## Capabilities
 
 - `request_interceptor` — prepends caveman/ponytail text to the request's
   system context (OpenAI `messages`, Anthropic `system`, Responses
-  `instructions` shapes all handled).
-- `management_api` — registers Fleet → `/savings`, served at
-  `/v0/resource/plugins/fleet/savings` and listed in CPAMC.
+  `instructions` shapes all handled). Terminates completions whose model
+  is outside the calling key's grant, and 404s unusable ocg muse-spark ids.
+- `response_interceptor` — filters `/v1/models` to the calling key's grant
+  and drops unusable compatibility ids.
+- `management_api` — registers Fleet Hub, Keys, Savings, and Router. Keys
+  JSON is key-gated at `/v0/management/fleet/keys`. The Keys HTML shell is
+  `/v0/resource/plugins/fleet/keys`. Grants live in
+  `~/.cli-proxy-api/fleet-keys.json` (mode 0600). The secret is returned
+  only on create.
 
 ## Config
 

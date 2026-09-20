@@ -1,0 +1,265 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet keys</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap" rel="stylesheet">
+<style>/*THEME*/</style></head><body>
+<div class="wrap">
+<header class="mast">
+  <div>
+    <div class="word">Fleet<em>.</em></div>
+    <p class="lede">One key. The catalog this proxy actually serves.</p>
+  </div>
+  <nav class="nav" aria-label="surfaces">
+    <a href="/v0/resource/plugins/fleet/hub">Hub</a>
+    <a href="/v0/resource/plugins/fleet/keys" class="here">Keys</a>
+    <a href="/v0/resource/plugins/fleet/savings">Savings</a>
+    <a href="/v0/resource/plugins/fleet/router">Router</a>
+    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
+    <a href="/management.html" target="_blank" rel="noopener">Console</a>
+  </nav>
+  <div class="keybox">
+    <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
+    <span class="hint" id="keyhint"></span>
+  </div>
+</header>
+
+<div id="lock"><div class="panel"><h2>Unlock keys</h2>
+  <p class="empty" style="margin:0 0 8px">Paste the management key once. Minting and revoking talk to the local proxy only.</p>
+  <div class="empty mono" id="lockerr"></div>
+</div></div>
+
+<div id="dash" hidden>
+<div id="ticket" class="board panel ticket" hidden>
+  <h2>Copy this secret now<span>it will not be shown again</span></h2>
+  <p class="empty" id="ticketname"></p>
+  <div class="stub">
+    <code id="ticketsecret"></code>
+    <button type="button" class="btn" id="copysecret">Copy secret</button>
+  </div>
+  <p class="empty">Point the client at <span class="mono">http://127.0.0.1:8317/v1</span> with this as the Bearer token.</p>
+</div>
+
+<div class="split board">
+  <div class="panel">
+    <h2>Mint a key<span>defaults to every enabled model</span></h2>
+    <label class="field">Name
+      <input id="newname" class="search" style="width:100%" placeholder="pi · claudex · laptop" aria-label="key name">
+    </label>
+    <div class="modes" role="radiogroup" aria-label="catalog">
+      <label class="mode"><input type="radio" name="mode" value="all" checked> All enabled models</label>
+      <label class="mode"><input type="radio" name="mode" value="list"> Pick models</label>
+    </div>
+    <input class="search" id="kfilter" placeholder="filter models" aria-label="filter models" hidden>
+    <div class="chips" id="pick" style="margin-top:12px" hidden></div>
+    <div style="margin-top:14px">
+      <button type="button" class="btn lampish" id="mint">Mint key</button>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>How it works</h2>
+    <p class="empty" style="margin:0 0 8px"><span class="mono">all</span> tracks whatever the proxy serves right now, including models you enable later.</p>
+    <p class="empty" style="margin:0 0 8px"><span class="mono">list</span> is exact ids plus prefixes such as <span class="mono">openai/</span>.</p>
+    <p class="empty" style="margin:0">A key with no grant on it (legacy <span class="mono">api-keys</span>) still sees the full catalog until you adopt it.</p>
+  </div>
+</div>
+
+<div class="board panel"><h2>Issued<span id="kcount"></span></h2>
+  <div id="issued"></div>
+</div>
+<div class="board panel" id="legacywrap" hidden><h2>Legacy api-keys<span>in the proxy, not yet a fleet grant</span></h2>
+  <div id="legacy"></div>
+</div>
+<footer>
+  <span id="stamp"></span>
+  <span>canonical link · <span class="mono">http://127.0.0.1:8317/v1</span></span>
+</footer>
+</div>
+</div>
+<div id="toast"></div>
+<script>
+const MGMT = "/v0/management";
+const LS = "fleet.hub.key";
+const keyEl = document.getElementById("key");
+keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
+keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function toast(msg, cls) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast " + (cls || "ok");
+  setTimeout(() => { t.textContent = ""; t.className = ""; }, 3200);
+}
+async function api(path, opts) {
+  const r = await fetch(MGMT + path, Object.assign({ headers: { "authorization": "Bearer " + keyEl.value, "content-type": "application/json" } }, opts || {}));
+  if (r.status === 401 || r.status === 403) { throw Object.assign(new Error("bad management key"), { auth: true }); }
+  if (!r.ok) { let m = "HTTP " + r.status; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+  return r.json();
+}
+function selectedMode() {
+  const el = document.querySelector('input[name="mode"]:checked');
+  return el ? el.value : "all";
+}
+function selectedModels() {
+  return Array.from(document.querySelectorAll("#pick .chip.on")).map(c => c.dataset.model);
+}
+function renderPick(models) {
+  const q = (document.getElementById("kfilter").value || "").toLowerCase();
+  const list = (models || []).filter(m => !q || m.toLowerCase().includes(q));
+  const on = new Set(window.__picked || []);
+  document.getElementById("pick").innerHTML = list.length
+    ? list.map(m => '<span class="chip' + (on.has(m) ? " on" : "") + '" data-model="' + esc(m) + '">' + esc(m) + "</span>").join("")
+    : '<span class="empty">no models served — enable a provider on Hub</span>';
+}
+function syncMode() {
+  const list = selectedMode() === "list";
+  document.getElementById("pick").hidden = !list;
+  document.getElementById("kfilter").hidden = !list;
+}
+document.querySelectorAll('input[name="mode"]').forEach(el => el.addEventListener("change", syncMode));
+document.getElementById("pick").addEventListener("click", e => {
+  const chip = e.target.closest(".chip[data-model]");
+  if (!chip) return;
+  chip.classList.toggle("on");
+  window.__picked = Array.from(document.querySelectorAll("#pick .chip.on")).map(c => c.dataset.model);
+});
+document.getElementById("kfilter").addEventListener("input", () => renderPick(window.__models || []));
+async function mint() {
+  const btn = document.getElementById("mint");
+  btn.disabled = true;
+  try {
+    const mode = selectedMode();
+    const body = { name: document.getElementById("newname").value.trim(), mode: mode };
+    if (mode === "list") body.models = selectedModels();
+    const r = await api("/fleet/keys", { method: "POST", body: JSON.stringify(body) });
+    showTicket(r);
+    document.getElementById("newname").value = "";
+    toast("minted " + (r.key && r.key.name || "key"));
+    await refresh(true);
+  } catch (e) { toast(e.message, "err"); }
+  btn.disabled = false;
+}
+document.getElementById("mint").addEventListener("click", mint);
+function showTicket(r) {
+  const box = document.getElementById("ticket");
+  box.hidden = false;
+  document.getElementById("ticketname").textContent = (r.key && r.key.name || "untitled") + " · " + (r.key && r.key.prefix || "");
+  document.getElementById("ticketsecret").textContent = r.secret || "";
+}
+document.getElementById("copysecret").addEventListener("click", async () => {
+  const s = document.getElementById("ticketsecret").textContent;
+  try { await navigator.clipboard.writeText(s); toast("secret copied"); }
+  catch (e) { toast("copy failed", "err"); }
+});
+function catalogLabel(k) {
+  if (k.disabled) return "disabled";
+  if (k.mode === "all") return "all enabled";
+  return (k.models || []).length + " models";
+}
+function renderIssued(keys) {
+  document.getElementById("kcount").textContent = keys && keys.length ? keys.length + " grants" : "none yet";
+  if (!keys || !keys.length) {
+    document.getElementById("issued").innerHTML = '<div class="empty">No fleet keys. Mint one to hand a client the catalog this proxy serves.</div>';
+    return;
+  }
+  document.getElementById("issued").innerHTML = keys.map(k => {
+    const badge = k.disabled ? '<span class="badge bad">disabled</span>' : (k.live ? '<span class="badge ok">live</span>' : '<span class="badge">not in proxy</span>');
+    const models = (k.mode === "all") ? '<span class="empty">tracks the live catalog</span>' : (k.models || []).map(m => '<span class="chip on" style="cursor:default">' + esc(m) + "</span>").join(" ");
+    return '<div class="kcard">' +
+      '<div class="khead"><div><b>' + esc(k.name || "untitled") + "</b><div class=\"mono empty\">" + esc(k.prefix) + "</div></div>" +
+      '<div>' + badge + ' <span class="badge">' + esc(catalogLabel(k)) + "</span></div></div>" +
+      '<div class="chips" style="margin:10px 0">' + models + "</div>" +
+      '<div class="kact">' +
+      '<label class="sw"><input type="checkbox" data-act="toggle" data-id="' + esc(k.id) + '" ' + (k.disabled ? "" : "checked") + '><span class="tr"></span></label>' +
+      (k.mode === "all"
+        ? '<button type="button" class="btn" data-act="restrict" data-id="' + esc(k.id) + '">Restrict</button>'
+        : '<button type="button" class="btn" data-act="all" data-id="' + esc(k.id) + '">All enabled</button>') +
+      '<button type="button" class="btn danger" data-act="revoke" data-id="' + esc(k.id) + '" data-name="' + esc(k.name || k.prefix) + '">Revoke</button>' +
+      "</div></div>";
+  }).join("");
+  document.getElementById("issued").querySelectorAll("[data-act]").forEach(el => {
+    el.addEventListener(el.tagName === "INPUT" ? "change" : "click", () => {
+      const id = el.dataset.id;
+      if (el.dataset.act === "toggle") toggleKey(id, el.checked, el);
+      if (el.dataset.act === "restrict") restrictKey(id);
+      if (el.dataset.act === "all") openAll(id);
+      if (el.dataset.act === "revoke") revokeKey(id, el.dataset.name || id);
+    });
+  });
+}
+function renderLegacy(rows) {
+  const wrap = document.getElementById("legacywrap");
+  if (!rows || !rows.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  document.getElementById("legacy").innerHTML = rows.map(r =>
+    '<div class="kcard"><div class="khead"><div><b>legacy</b><div class="mono empty">' + esc(r.prefix) + "</div></div>" +
+    '<button type="button" class="btn" data-act="adopt" data-index="' + r.index + '">Adopt</button></div></div>'
+  ).join("");
+  document.getElementById("legacy").querySelectorAll("[data-act=adopt]").forEach(el => {
+    el.addEventListener("click", () => adoptKey(Number(el.dataset.index)));
+  });
+}
+async function toggleKey(id, on, el) {
+  el.disabled = true;
+  try {
+    await api("/fleet/keys", { method: "PATCH", body: JSON.stringify({ id: id, disabled: !on }) });
+    toast(on ? "enabled" : "disabled"); refresh(true);
+  } catch (e) { toast(e.message, "err"); el.disabled = false; }
+}
+async function openAll(id) {
+  try {
+    await api("/fleet/keys", { method: "PATCH", body: JSON.stringify({ id: id, mode: "all", models: [] }) });
+    toast("now tracks all enabled models"); refresh(true);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function restrictKey(id) {
+  const models = selectedModels();
+  if (!models.length) { toast("pick models in the mint panel first", "err"); return; }
+  try {
+    await api("/fleet/keys", { method: "PATCH", body: JSON.stringify({ id: id, mode: "list", models: models }) });
+    toast("restricted"); refresh(true);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function revokeKey(id, name) {
+  if (!confirm("Revoke " + name + "? Clients using it will 401.")) return;
+  try {
+    await api("/fleet/keys?id=" + encodeURIComponent(id), { method: "DELETE" });
+    toast("revoked"); refresh(true);
+  } catch (e) { toast(e.message, "err"); }
+}
+async function adoptKey(index) {
+  try {
+    await api("/fleet/keys/adopt", { method: "POST", body: JSON.stringify({ index: index, name: "adopted", mode: "all" }) });
+    toast("adopted as all enabled"); refresh(true);
+  } catch (e) { toast(e.message, "err"); }
+}
+let inflight = false;
+async function refresh(keepTicket) {
+  if (inflight) return; inflight = true;
+  document.getElementById("keyhint").textContent = "";
+  try {
+    const [s, k] = await Promise.all([api("/fleet/state"), api("/fleet/keys")]);
+    window.__models = s.models || [];
+    document.getElementById("lock").hidden = true;
+    document.getElementById("dash").hidden = false;
+    if (!keepTicket) document.getElementById("ticket").hidden = true;
+    renderPick(s.models || []);
+    renderIssued(k.keys || []);
+    renderLegacy(k.legacy || []);
+    document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString();
+  } catch (e) {
+    if (e.auth) {
+      document.getElementById("lock").hidden = false;
+      document.getElementById("dash").hidden = true;
+      document.getElementById("lockerr").textContent = keyEl.value ? "Key rejected." : "";
+      document.getElementById("keyhint").textContent = "required";
+    } else {
+      toast("state fetch failed: " + e.message, "err");
+    }
+  }
+  inflight = false;
+}
+syncMode();
+refresh();
+setInterval(() => refresh(true), 15000);
+</script></body></html>
