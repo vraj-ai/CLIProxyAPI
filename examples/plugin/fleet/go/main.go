@@ -403,6 +403,9 @@ func intercept(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	if raw, hit, err := terminateUnusable(req); hit || err != nil {
+		return raw, err
+	}
 	if !grantAllowsRequest(extractAPIKey(req.Headers), req.Model, req.RequestedModel) {
 		return okEnvelope(pluginapi.RequestInterceptResponse{
 			Headers:         req.Headers,
@@ -433,6 +436,9 @@ func interceptAfter(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	if rawOut, hit, err := terminateUnusable(req); hit || err != nil {
+		return rawOut, err
+	}
 	if !grantAllowsRequest(extractAPIKey(req.Headers), req.Model, req.RequestedModel) {
 		return okEnvelope(pluginapi.RequestInterceptResponse{
 			Headers:         req.Headers,
@@ -453,9 +459,10 @@ func interceptModelsResponse(raw []byte) ([]byte, error) {
 	}
 	body := req.Body
 	g, err := grantForSecret(extractAPIKey(req.RequestHeaders))
-	if err == nil && g != nil {
-		body = filterModelList(req.Body, func(id string) bool { return catalogAllows(g, id) })
+	if err != nil {
+		g = nil
 	}
+	body = filterModelList(req.Body, func(id string) bool { return allowServedModel(id, g) })
 	return okEnvelope(pluginapi.ResponseInterceptResponse{Headers: req.ResponseHeaders, Body: body})
 }
 
