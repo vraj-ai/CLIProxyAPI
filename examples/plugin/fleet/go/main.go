@@ -94,23 +94,27 @@ func cliproxyPluginShutdown() {}
 // config
 
 type pluginConfig struct {
-	Caveman         bool     `yaml:"caveman"`
-	Ponytail        bool     `yaml:"ponytail"`
-	Models          []string `yaml:"models"`            // model prefixes to inject; empty = all
-	PxpipeEvents    string   `yaml:"pxpipe_events"`     // events.jsonl path
-	UsageGain       string   `yaml:"usage_gain"`        // pi usage-gain.jsonl path
-	RouterEnabled   bool     `yaml:"router_enabled"`    // expose the "cpa router" virtual model
-	RouterAgent     string   `yaml:"router_agent"`      // herdr agent selector used as lead
-	RouterTimeoutMS int      `yaml:"router_timeout_ms"` // bound on the lead wait
-	RouterReadLines int      `yaml:"router_read_lines"` // read-back window for marker extraction
-	RedactSentinels []string `yaml:"redact_sentinels"`  // literals that must never appear in diagnostics
-	PxpipeEnabled   bool     `yaml:"pxpipe_enabled"`    // route eligible bodies through the pxpipe transform shim
-	PxpipeURL       string   `yaml:"pxpipe_url"`        // pxpipe-transform shim base URL
+	Caveman           bool             `yaml:"caveman"`
+	Ponytail          bool             `yaml:"ponytail"`
+	ClientTools       clientToolConfig `yaml:"client_tools"`
+	Models            []string         `yaml:"models"` // model prefixes to inject; empty = all
+	ModelPoliciesPath string           `yaml:"model_policies_path"`
+	PxpipeEvents      string           `yaml:"pxpipe_events"`     // events.jsonl path
+	UsageGain         string           `yaml:"usage_gain"`        // pi usage-gain.jsonl path
+	RouterEnabled     bool             `yaml:"router_enabled"`    // expose the "cpa router" virtual model
+	RouterAgent       string           `yaml:"router_agent"`      // herdr agent selector used as lead
+	RouterTimeoutMS   int              `yaml:"router_timeout_ms"` // bound on the lead wait
+	RouterReadLines   int              `yaml:"router_read_lines"` // read-back window for marker extraction
+	RedactSentinels   []string         `yaml:"redact_sentinels"`  // literals that must never appear in diagnostics
+	PxpipeEnabled     bool             `yaml:"pxpipe_enabled"`    // route eligible bodies through the pxpipe transform shim
+	PxpipeURL         string           `yaml:"pxpipe_url"`        // pxpipe-transform shim base URL
 }
 
 var state = struct {
 	mu         sync.Mutex
 	config     pluginConfig
+	policies   map[string]modelFeaturePolicy
+	policyPath string
 	injections int64
 	backend    leadBackend
 	quota      quotaSource
@@ -155,8 +159,15 @@ func configure(raw []byte) error {
 	if cfg.PxpipeURL == "" {
 		cfg.PxpipeURL = "http://127.0.0.1:47822"
 	}
+	policyPath := featurePolicyPath(cfg)
+	policies, err := loadModelPolicies(policyPath)
+	if err != nil {
+		return fmt.Errorf("load fleet model policies: %w", err)
+	}
 	state.mu.Lock()
 	state.config = cfg
+	state.policies = policies
+	state.policyPath = policyPath
 	state.sentinels = cfg.RedactSentinels
 	state.mu.Unlock()
 	return nil
@@ -175,6 +186,17 @@ func instructionText(cfg pluginConfig) string {
 		parts = append(parts, cavemanText)
 	}
 	if cfg.Ponytail {
+		parts = append(parts, ponytailText)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func instructionTextForModel(cfg pluginConfig, model string) string {
+	parts := make([]string, 0, 2)
+	if modelFeatureEnabled(cfg, model, featureCaveman) {
+		parts = append(parts, cavemanText)
+	}
+	if modelFeatureEnabled(cfg, model, featurePonytail) {
 		parts = append(parts, ponytailText)
 	}
 	return strings.Join(parts, "\n\n")
@@ -330,7 +352,8 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 			{"Method":"POST","Path":"/fleet/keys/adopt"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope"},
 			{"Method":"POST","Path":"/fleet/pxpipe/scope/toggle"},
-			{"Method":"POST","Path":"/fleet/pxpipe/compression"}
+			{"Method":"POST","Path":"/fleet/pxpipe/compression"},
+			{"Method":"POST","Path":"/fleet/features"}
 		],"resources":[
 			{"Path":"/hub","Menu":"Fleet Hub","Description":"Unified control plane — quota pace, cpa router, providers, models, pxpipe scope, and fleet flags."},
 			{"Path":"/keys","Menu":"Fleet Keys","Description":"Mint OpenRouter-style API keys for the models this proxy currently serves."},
@@ -382,6 +405,8 @@ func buildRegistration() pluginRegistration {
 				{Name: "router_read_lines", Type: pluginapi.ConfigFieldTypeInteger, Description: "Terminal read-back window for result marker extraction."},
 				{Name: "pxpipe_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Route in-scope request bodies through the pxpipe transform shim so the cliproxyapi link includes pxpipe."},
 				{Name: "pxpipe_url", Type: pluginapi.ConfigFieldTypeString, Description: "pxpipe-transform shim base URL (default http://127.0.0.1:47822)."},
+				{Name: "client_tools", Type: pluginapi.ConfigFieldTypeObject, Description: "Opt-in client layers. Headroom is a local context proxy and RTK rewrites shell output."},
+				{Name: "model_policies_path", Type: pluginapi.ConfigFieldTypeString, Description: "Private path for exact-model feature overrides."},
 			},
 		},
 		Capabilities: registrationCapability{
@@ -421,7 +446,7 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
-		if injected, ok := inject(instructionText(cfg), req.SourceFormat, body); ok {
+		if injected, ok := inject(instructionTextForModel(cfg, req.Model), req.SourceFormat, body); ok {
 			body = injected
 			state.mu.Lock()
 			state.injections++

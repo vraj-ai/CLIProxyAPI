@@ -29,7 +29,8 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") {
+	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") ||
+		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") {
 		t.Fatalf("hub page missing panels")
 	}
 	if strings.Contains(string(resp.Body), `"eligible"`) && strings.Contains(string(resp.Body), `"decisions"`) && strings.Contains(string(resp.Body), "correlation_id") {

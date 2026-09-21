@@ -82,6 +82,25 @@ h2 span { font-family: var(--sans); font-size: 12px; font-weight: 500; color: va
   padding: 16px 18px;
 }
 .pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; }
+.route-head { display: flex; justify-content: space-between; gap: 18px; align-items: end; }
+.model-picker { display: grid; gap: 5px; min-width: min(360px, 100%); color: var(--faint); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.model-picker select { width: 100%; background: var(--well); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); padding: 9px 11px; font: 13px var(--mono); }
+.route-summary { display: flex; gap: 8px; align-items: center; margin: 14px 0 10px; color: var(--muted); font-size: 12px; }
+.summary-sep { color: var(--faint); }
+.feature-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
+.feature-card { min-height: 142px; background: var(--well); border: 1px solid var(--line); border-radius: 11px; padding: 12px; display: flex; flex-direction: column; }
+.feature-card.client { background: linear-gradient(145deg, #2c241d, #29252b); }
+.feature-card.disabled { opacity: .62; }
+.feature-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.feature-card h3 { margin: 3px 0 0; font: 600 15px var(--sans); }
+.feature-card p { color: var(--muted); font-size: 12px; line-height: 1.35; margin: 10px 0; }
+.feature-kind { color: var(--faint); font: 10px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.feature-foot { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: auto; }
+.reset { margin-left: auto; border: 0; background: transparent; color: var(--steel); cursor: pointer; font: 11px var(--mono); padding: 2px 0; }
+.reset:hover { color: var(--ink); text-decoration: underline; }
+@media (max-width: 920px) { .feature-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .route-head { align-items: stretch; flex-direction: column; } .model-picker { min-width: 0; } .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 390px) { .feature-grid { grid-template-columns: 1fr; } }
 .node {
   background: var(--well);
   border: 1px solid var(--line);

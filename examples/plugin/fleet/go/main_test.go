@@ -177,6 +177,8 @@ func runIntercept(t *testing.T, method string, req pluginapi.RequestInterceptReq
 func resetState(cfg pluginConfig) {
 	state.mu.Lock()
 	state.config = cfg
+	state.policies = nil
+	state.policyPath = ""
 	state.injections = 0
 	state.mu.Unlock()
 }

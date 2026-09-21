@@ -1,7 +1,7 @@
 # Fleet Plugin
 
-vraj's fleet plugin: injects caveman + ponytail instructions into every
-routed request, serves the fleet switchboard (hub, keys, savings, router),
+vraj's fleet plugin: applies model-policy-controlled caveman + ponytail
+instructions to routed requests, serves the fleet switchboard (hub, keys, savings, router),
 and issues OpenRouter-style API keys for the models this proxy serves.
 
 ## Capabilities
@@ -18,6 +18,11 @@ and issues OpenRouter-style API keys for the models this proxy serves.
   `~/.cli-proxy-api/fleet-keys.json` (mode 0600). The secret is returned
   only on create.
 
+Fleet Hub Path controls select an exact served model and let it inherit or
+override pxpipe, caveman, ponytail, Headroom, and RTK. Headroom runs as a
+separate OpenAI-compatible client proxy; RTK filters agent shell output. They
+are not provider-side hops.
+
 ## Config
 
 ```yaml
@@ -29,6 +34,10 @@ plugins:
       enabled: true
       caveman: true     # terse-output instruction
       ponytail: true    # lazy-solution instruction
+      client_tools:     # optional client layers; both default false
+        headroom: false
+        rtk: false
+      # model_policies_path: ~/.cli-proxy-api/fleet-policies.json
       # models: ["or/", "ocg/"]  # optional prefix filter; empty = all
       # pxpipe_events: ~/.pxpipe/events.jsonl      # defaults shown
       # usage_gain: ~/.pi/agent/usage-gain.jsonl

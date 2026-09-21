@@ -134,6 +134,7 @@ type hubState struct {
 	Quota       []hubQuotaProvider `json:"quota"`
 	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
+	Features    hubFeatureState    `json:"features"`
 	Keys        []publicGrant      `json:"keys"`
 }
 
@@ -467,6 +468,7 @@ func buildHubState() hubState {
 	state.mu.Lock()
 	pluginCfg := state.config
 	state.mu.Unlock()
+	models := servedModels(cfg)
 	return hubState{
 		GeneratedAt: nowFunc().UTC().Format(time.RFC3339),
 		Link:        "http://127.0.0.1:8317",
@@ -477,7 +479,8 @@ func buildHubState() hubState {
 			Pxpipe:   pluginCfg.PxpipeEnabled,
 		},
 		Providers: buildProviders(cfg, auths, pluginCfg.RouterEnabled),
-		Models:    servedModels(cfg),
+		Models:    models,
+		Features:  buildFeatureState(models),
 		Quota:     buildQuota(),
 		Router:    buildRouterView(live),
 		Pxpipe: hubPxpipe{
@@ -657,6 +660,8 @@ func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, e
 		return pxpipeScopeSet(req.Body)
 	case kind == "management" && rel == "/fleet/pxpipe/compression" && req.Method == http.MethodPost:
 		return pxpipeCompression(req.Body)
+	case kind == "management" && rel == "/fleet/features" && req.Method == http.MethodPost:
+		return setModelFeature(req.Body)
 	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodGet:
 		return keysListHandler(req)
 	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodPost:

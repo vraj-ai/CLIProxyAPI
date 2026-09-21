@@ -33,6 +33,14 @@
 <div class="board panel"><h2>Path<span id="pipenote"></span></h2>
   <div class="pipe" id="pipeline"></div>
 </div>
+<div class="board panel route-controls">
+  <div class="route-head">
+    <div><h2>Path controls<span>exact model policy</span></h2><p class="meta">Request layers run inside Fleet. Client layers stay beside the provider path.</p></div>
+    <label class="model-picker"><span>model</span><select id="featureModel" aria-label="model for path controls"></select></label>
+  </div>
+  <div id="featureSummary" class="route-summary"></div>
+  <div id="featureControls" class="feature-grid"></div>
+</div>
 <div class="split board">
   <div class="panel"><h2>Quota<span>used vs elapsed · openusage --force</span></h2>
     <div id="quota"></div>
@@ -83,6 +91,28 @@ async function api(path, opts) {
   return r.json();
 }
 const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : (Math.round(n * 10) / 10).toString();
+const MODEL_LS = "fleet.hub.model";
+let selectedModel = sessionStorage.getItem(MODEL_LS) || "";
+const featureMeta = [
+  ["pxpipe", "pxpipe", "request", "transform request bodies"],
+  ["caveman", "caveman", "request", "compress agent instructions"],
+  ["ponytail", "ponytail", "request", "prefer minimal solutions"],
+  ["headroom", "Headroom", "client", "compress long context locally"],
+  ["rtk", "RTK", "client", "filter shell output before the model"]
+];
+function selectedFeatureModel(s) {
+  const models = s.models || [];
+  if (selectedModel && models.includes(selectedModel)) return selectedModel;
+  selectedModel = models.find(m => m === "or/grok-4.6") || models.find(m => /grok-4\.6/i.test(m)) || models[0] || "";
+  return selectedModel;
+}
+function featureOverride(s, model, key) {
+  const p = (s.features && s.features.overrides && s.features.overrides[model]) || {};
+  return Object.prototype.hasOwnProperty.call(p, key);
+}
+function featureTool(s, key) {
+  return (s.features && s.features.tools && s.features.tools[key]) || { available: false, active: false, configured: false, note: "not configured" };
+}
 function ago(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (s < 60) return Math.floor(s) + "s ago";
@@ -97,12 +127,15 @@ function until(iso) {
   return Math.floor(s / 86400) + "d" + Math.floor((s % 86400) / 3600) + "h";
 }
 function renderPipe(s) {
+  const model = selectedFeatureModel(s);
+  const selected = s.features && s.features.effective && s.features.effective[model];
+  const fleetDetail = selected ? "pxpipe " + (selected.pxpipe ? "on" : "off") + " · caveman " + (selected.caveman ? "on" : "off") + " · ponytail " + (selected.ponytail ? "on" : "off") : "request policy";
   const nodes = [
     ["harness", true, "pi / any client"],
     ["pxpipe", s.pxpipe.reachable, s.pxpipe.reachable ? "47821" : "down"],
     ["shim", s.pxpipe.shim_enabled ? s.pxpipe.shim_up : null, s.pxpipe.shim_enabled ? (s.pxpipe.shim_up ? "transform" : "down") : "off"],
     ["cliproxyapi", true, "8317"],
-    ["fleet plugin", true, "caveman · ponytail · router"],
+    ["fleet plugin", true, fleetDetail],
     ["lead", s.router.enabled ? !!s.router.eligible : null, s.router.eligible || (s.router.enabled ? "none eligible" : "router off")]
   ];
   document.getElementById("pipeline").innerHTML = nodes.map(n => {
@@ -111,6 +144,53 @@ function renderPipe(s) {
   }).join('<span class="seg" aria-hidden="true"></span>');
   document.getElementById("linkline").textContent = "Point harnesses at " + s.link + "/v1";
 }
+function renderFeatureControls(s) {
+  const model = selectedFeatureModel(s);
+  const select = document.getElementById("featureModel");
+  select.innerHTML = (s.models || []).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + '>' + esc(m) + "</option>").join("");
+  const active = s.features && s.features.effective && s.features.effective[model] || {};
+  document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(model || "no model selected") + '</span><span class="summary-sep">·</span><span>' + (model ? "changes apply to this exact served id" : "enable a provider to choose a model") + '</span>';
+  document.getElementById("featureControls").innerHTML = featureMeta.map(row => {
+    const key = row[0], tool = row[2] === "client" ? featureTool(s, key) : null;
+    const on = !!active[key], overridden = featureOverride(s, model, key);
+    const disabled = tool && !tool.available;
+    const state = disabled ? "unavailable" : (on ? "on" : "off");
+    const sub = disabled ? (tool.note || "install to enable") : (overridden ? "model override" : "inherits global");
+    return '<article class="feature-card ' + row[2] + (disabled ? " disabled" : "") + '">' +
+      '<div class="feature-card-top"><div><span class="feature-kind">' + esc(row[2]) + '</span><h3>' + esc(row[1]) + '</h3></div>' +
+      '<label class="sw" title="toggle ' + esc(row[1]) + '"><input type="checkbox" ' + (on ? "checked" : "") + (disabled ? " disabled" : "") + ' onchange="setModelFeature(\'' + key + '\',this.checked,this)"><span class="tr"></span></label></div>' +
+      '<p>' + esc(row[3]) + '</p><div class="feature-foot"><span class="badge ' + (disabled ? "bad" : (on ? "ok" : "")) + '">' + state + '</span><span class="empty">' + esc(sub) + '</span>' +
+      (overridden ? '<button class="reset" onclick="resetModelFeature(\'' + key + '\',this)">reset</button>' : "") + '</div></article>';
+  }).join("");
+}
+async function setModelFeature(feature, value, el) {
+  if (el) el.disabled = true;
+  try {
+    await api("/fleet/features", { method: "POST", body: JSON.stringify({ model: selectedModel, feature: feature, value: value }) });
+    toast(feature + " = " + value + " for " + selectedModel); refresh();
+  } catch (e) { toast(e.message, "err"); refresh(); }
+}
+async function resetModelFeature(feature, el) {
+  if (el) el.disabled = true;
+  try {
+    await api("/fleet/features", { method: "POST", body: JSON.stringify({ model: selectedModel, feature: feature, value: null }) });
+    toast("reset " + feature + " for " + selectedModel); refresh();
+  } catch (e) { toast(e.message, "err"); refresh(); }
+}
+async function setClientTool(tool, value, el) {
+  if (el) el.disabled = true;
+  const d = window.__state && window.__state.features && window.__state.features.defaults || {};
+  const next = { headroom: !!d.headroom, rtk: !!d.rtk };
+  next[tool] = value;
+  try {
+    await api("/plugins/fleet/config", { method: "PATCH", body: JSON.stringify({ client_tools: next }) });
+    toast(tool + " = " + value); refresh();
+  } catch (e) { toast(e.message, "err"); refresh(); }
+}
+document.getElementById("featureModel").addEventListener("change", e => {
+  selectedModel = e.target.value; sessionStorage.setItem(MODEL_LS, selectedModel);
+  if (window.__state) { renderPipe(window.__state); renderFeatureControls(window.__state); }
+});
 function renderQuota(s) {
   const el = document.getElementById("quota");
   if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
@@ -214,9 +294,10 @@ function renderKeys(s) {
 }
 function renderFlags(s) {
   const f = s.flags;
-  const rows = [["caveman", "caveman", f.caveman, "compressed replies"], ["ponytail", "ponytail", f.ponytail, "lazy solutions"], ["router", "router_enabled", f.router, "cpa router"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop"]];
+  const d = s.features && s.features.defaults || {};
+  const rows = [["caveman", "caveman", f.caveman, "compressed replies"], ["ponytail", "ponytail", f.ponytail, "lazy solutions"], ["router", "router_enabled", f.router, "cpa router"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop"], ["Headroom", "headroom", d.headroom, "client context proxy"], ["RTK", "rtk", d.rtk, "agent shell filter"]];
   document.getElementById("flags").innerHTML = rows.map(r =>
-    '<div class="flag"><label class="sw"><input type="checkbox" ' + (r[2] ? "checked" : "") + ' onchange="setFlag(\'' + r[1] + '\',' + !r[2] + ',this)"><span class="tr"></span></label><b>' + r[0] + '</b><small>' + r[3] + "</small></div>").join("");
+    '<div class="flag"><label class="sw"><input type="checkbox" ' + (r[2] ? "checked" : "") + ' onchange="' + (r[1] === "headroom" || r[1] === "rtk" ? "setClientTool" : "setFlag") + '(\'' + r[1] + '\',' + !r[2] + ',this)"><span class="tr"></span></label><b>' + r[0] + '</b><small>' + r[3] + "</small></div>").join("");
 }
 let inflight = false;
 async function refresh() {
@@ -227,7 +308,7 @@ async function refresh() {
     window.__state = s;
     document.getElementById("lock").hidden = true;
     document.getElementById("dash").hidden = false;
-    renderPipe(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
+    renderPipe(s); renderFeatureControls(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
     document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString() + " · auto-refresh 15s";
   } catch (e) {
     if (e.auth) {
