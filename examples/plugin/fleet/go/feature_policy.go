@@ -143,6 +143,10 @@ func validFeature(name string) bool {
 	return false
 }
 
+func modelScopedFeature(name string) bool {
+	return name == featurePxpipe || name == featureCaveman || name == featurePonytail
+}
+
 func validModelID(model string) bool {
 	model = strings.TrimSpace(model)
 	return model != "" && len(model) <= 200 && !strings.ContainsAny(model, "\r\n")
@@ -219,6 +223,9 @@ func saveModelPolicies(path string, policies map[string]modelFeaturePolicy) erro
 
 func modelFeatureEnabled(cfg pluginConfig, model, feature string) bool {
 	defaults := defaultFeatureDefaults(cfg)
+	if !modelScopedFeature(feature) {
+		return defaults.value(feature)
+	}
 	state.mu.Lock()
 	policy := state.policies[model]
 	state.mu.Unlock()
@@ -298,6 +305,9 @@ func setModelFeature(raw []byte) ([]byte, error) {
 	if json.Unmarshal(input["model"], &model) != nil || !validModelID(model) ||
 		json.Unmarshal(input["feature"], &feature) != nil || !validFeature(feature) {
 		return jsonResp(map[string]string{"error": "invalid_feature_request"}, http.StatusBadRequest)
+	}
+	if !modelScopedFeature(feature) {
+		return jsonResp(map[string]string{"error": "feature_is_global_only"}, http.StatusBadRequest)
 	}
 	valueRaw, ok := input["value"]
 	if !ok {

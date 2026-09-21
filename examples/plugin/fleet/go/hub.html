@@ -94,11 +94,11 @@ const fmt = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : (Math.round(n * 10) /
 const MODEL_LS = "fleet.hub.model";
 let selectedModel = sessionStorage.getItem(MODEL_LS) || "";
 const featureMeta = [
-  ["pxpipe", "pxpipe", "request", "transform request bodies"],
-  ["caveman", "caveman", "request", "compress agent instructions"],
-  ["ponytail", "ponytail", "request", "prefer minimal solutions"],
-  ["headroom", "Headroom", "client", "compress long context locally"],
-  ["rtk", "RTK", "client", "filter shell output before the model"]
+  ["pxpipe", "pxpipe", "request", "transform request bodies", true],
+  ["caveman", "caveman", "request", "compress agent instructions", true],
+  ["ponytail", "ponytail", "request", "prefer minimal solutions", true],
+  ["headroom", "Headroom", "client", "compress long context locally", false],
+  ["rtk", "RTK", "client", "filter shell output before the model", false]
 ];
 function selectedFeatureModel(s) {
   const models = s.models || [];
@@ -151,16 +151,17 @@ function renderFeatureControls(s) {
   const active = s.features && s.features.effective && s.features.effective[model] || {};
   document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(model || "no model selected") + '</span><span class="summary-sep">·</span><span>' + (model ? "changes apply to this exact served id" : "enable a provider to choose a model") + '</span>';
   document.getElementById("featureControls").innerHTML = featureMeta.map(row => {
-    const key = row[0], tool = row[2] === "client" ? featureTool(s, key) : null;
+    const key = row[0], modelScoped = row[4], tool = row[2] === "client" ? featureTool(s, key) : null;
     const on = !!active[key], overridden = featureOverride(s, model, key);
     const disabled = tool && !tool.available;
     const state = disabled ? "unavailable" : (on ? "on" : "off");
-    const sub = disabled ? (tool.note || "install to enable") : (overridden ? "model override" : "inherits global");
+    const sub = !modelScoped ? "use the global client toggle below" : (disabled ? (tool.note || "install to enable") : (overridden ? "model override" : "inherits global"));
+    const toggle = modelScoped ? '<label class="sw" title="toggle ' + esc(row[1]) + '"><input type="checkbox" ' + (on ? "checked" : "") + (disabled ? " disabled" : "") + ' onchange="setModelFeature(\'' + key + '\',this.checked,this)"><span class="tr"></span></label>' : '<span class="badge">global only</span>';
     return '<article class="feature-card ' + row[2] + (disabled ? " disabled" : "") + '">' +
       '<div class="feature-card-top"><div><span class="feature-kind">' + esc(row[2]) + '</span><h3>' + esc(row[1]) + '</h3></div>' +
-      '<label class="sw" title="toggle ' + esc(row[1]) + '"><input type="checkbox" ' + (on ? "checked" : "") + (disabled ? " disabled" : "") + ' onchange="setModelFeature(\'' + key + '\',this.checked,this)"><span class="tr"></span></label></div>' +
+      toggle + '</div>' +
       '<p>' + esc(row[3]) + '</p><div class="feature-foot"><span class="badge ' + (disabled ? "bad" : (on ? "ok" : "")) + '">' + state + '</span><span class="empty">' + esc(sub) + '</span>' +
-      (overridden ? '<button class="reset" onclick="resetModelFeature(\'' + key + '\',this)">reset</button>' : "") + '</div></article>';
+      (modelScoped && overridden ? '<button class="reset" onclick="resetModelFeature(\'' + key + '\',this)">reset</button>' : "") + '</div></article>';
   }).join("");
 }
 async function setModelFeature(feature, value, el) {

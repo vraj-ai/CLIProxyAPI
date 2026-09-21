@@ -13,11 +13,11 @@ import (
 )
 
 func TestModelFeaturePolicyInheritsAndOverrides(t *testing.T) {
-	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true})
+	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true, ClientTools: clientToolConfig{Headroom: true, RTK: true}})
 	falseValue := false
 	state.mu.Lock()
 	state.policies = map[string]modelFeaturePolicy{
-		"or/grok-4.6": {Ponytail: &falseValue},
+		"or/grok-4.6": {Ponytail: &falseValue, Headroom: &falseValue, RTK: &falseValue},
 	}
 	state.mu.Unlock()
 
@@ -29,6 +29,9 @@ func TestModelFeaturePolicyInheritsAndOverrides(t *testing.T) {
 	}
 	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePxpipe) {
 		t.Fatal("model did not inherit pxpipe default")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featureHeadroom) || !modelFeatureEnabled(state.config, "or/grok-4.6", featureRTK) {
+		t.Fatal("client layers must inherit global defaults")
 	}
 }
 
@@ -96,6 +99,8 @@ func TestSetModelFeatureRejectsInvalidInput(t *testing.T) {
 	for _, raw := range []string{
 		`{"model":"or/grok-4.6","feature":"nope","value":true}`,
 		`{"model":"or/grok-4.6","feature":"ponytail","value":"yes"}`,
+		`{"model":"or/grok-4.6","feature":"headroom","value":true}`,
+		`{"model":"or/grok-4.6","feature":"rtk","value":false}`,
 	} {
 		out, err := setModelFeature([]byte(raw))
 		if err != nil {
