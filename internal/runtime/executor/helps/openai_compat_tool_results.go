@@ -69,7 +69,12 @@ func removeTranslatedToolResultImages(payload []byte) []byte {
 		case "tool":
 			toolIndex = messageIndex
 		case "user":
-			if toolIndex >= 0 && isTranslatedToolImageMessage(message.Get("content")) {
+			if toolIndex >= 0 {
+				parts := translatedToolImageParts(message.Get("content"))
+				if len(parts) == 0 {
+					toolIndex = -1
+					break
+				}
 				path := fmt.Sprintf("messages.%d.content", toolIndex)
 				content := gjson.GetBytes(out, path).String()
 				if !strings.Contains(content, openAIToolResultImageOmittedText) {
@@ -80,7 +85,16 @@ func removeTranslatedToolResultImages(payload []byte) []byte {
 						out = updated
 					}
 				}
-				removals = append(removals, messageIndex)
+				for i := len(message.Get("content").Array()) - 1; i >= 0; i-- {
+					if parts[i] {
+						if updated, errDelete := sjson.DeleteBytes(out, fmt.Sprintf("messages.%d.content.%d", messageIndex, i)); errDelete == nil {
+							out = updated
+						}
+					}
+				}
+				if len(gjson.GetBytes(out, fmt.Sprintf("messages.%d.content", messageIndex)).Array()) == 0 {
+					removals = append(removals, messageIndex)
+				}
 			}
 			toolIndex = -1
 		default:
@@ -97,26 +111,32 @@ func removeTranslatedToolResultImages(payload []byte) []byte {
 	return out
 }
 
-func isTranslatedToolImageMessage(content gjson.Result) bool {
+func translatedToolImageParts(content gjson.Result) map[int]bool {
 	if !content.IsArray() {
-		return false
+		return nil
 	}
+	parts := map[int]bool{}
 	hasLabel := false
 	hasImage := false
-	valid := true
+	index := 0
 	content.ForEach(func(_, item gjson.Result) bool {
 		if item.Get("type").String() == "text" && item.Get("text").String() == "Images returned by the preceding tool call(s):" {
 			hasLabel = true
+			parts[index] = true
+			index++
 			return true
 		}
 		if isOpenAIImageToolResultPart(item) {
 			hasImage = true
-			return true
+			parts[index] = true
 		}
-		valid = false
-		return false
+		index++
+		return true
 	})
-	return valid && hasLabel && hasImage
+	if hasLabel && hasImage {
+		return parts
+	}
+	return nil
 }
 
 func openAICompatibilityModelExcludesImages(models []config.OpenAICompatibilityModel, model string) (bool, bool) {

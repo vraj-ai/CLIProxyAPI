@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,9 +23,11 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 		inputModalities  []string
 		wantOmittedImage bool
 		wantImage        bool
+		trailingUserText bool
 	}{
 		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantOmittedImage: true},
 		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantOmittedImage: true},
+		{name: "non-stream text-only with trailing user text", stream: false, inputModalities: []string{"text"}, wantOmittedImage: true, trailingUserText: true},
 		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantImage: true},
 		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantImage: true},
 	}
@@ -63,7 +66,11 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 					"provider_key": "compat",
 				},
 			}
-			payload := []byte(`{"model":"claude-client","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"inspect_image","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"image inspected"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}]}`)
+			trailing := ""
+			if tt.trailingUserText {
+				trailing = `,{"type":"text","text":"answer concisely"}`
+			}
+			payload := []byte(fmt.Sprintf(`{"model":"claude-client","max_tokens":64,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"inspect_image","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"image inspected"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}%s]}]}`, trailing))
 			req := cliproxyexecutor.Request{Model: "mapped-model", Payload: payload}
 			opts := cliproxyexecutor.Options{
 				SourceFormat:   sdktranslator.FormatClaude,
@@ -98,6 +105,9 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 			}
 			if gotImage := strings.Contains(string(gotBody), `"image_url"`); gotImage != tt.wantImage {
 				t.Fatalf("image forwarded = %t, want %t; body=%s", gotImage, tt.wantImage, string(gotBody))
+			}
+			if tt.trailingUserText && !strings.Contains(string(gotBody), "answer concisely") {
+				t.Fatalf("trailing user text was lost; body=%s", string(gotBody))
 			}
 		})
 	}
