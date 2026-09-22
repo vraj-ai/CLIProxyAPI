@@ -3,7 +3,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap" rel="stylesheet">
-<style>/*THEME*/</style></head><body>
+<style>/*THEME*/</style>
+<script>/*KEYRING*/</script></head><body>
 <div class="wrap">
 <header class="mast">
   <div>
@@ -14,8 +15,6 @@
     <a href="/v0/resource/plugins/fleet/hub" class="here">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
     <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
@@ -43,12 +42,10 @@
 </div>
 <div class="split board">
   <div class="panel"><h2>Quota<span>used vs elapsed · openusage --force</span></h2>
-    <div id="quota"></div>
+    <div id="quotacards" class="quotacards"></div>
   </div>
-  <div class="panel"><h2>Router<span id="routersub"></span></h2>
-    <div id="routerbody"></div>
-    <h2 style="margin-top:18px">Recent decisions</h2>
-    <div id="decisions"></div>
+  <div class="panel"><h2>Pace<span>latest completed</span></h2>
+    <div id="pace" class="pace"></div>
   </div>
 </div>
 <div class="board panel"><h2>Providers<span>toggles write through the core management API</span></h2>
@@ -75,7 +72,7 @@
 const MGMT = "/v0/management";
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = sessionStorage.getItem(LS) || (window.consoleStoredKey && consoleStoredKey()) || "";
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -102,7 +99,7 @@ const featureMeta = [
 ];
 function selectedFeatureModel(s) {
   const models = s.models || [];
-  if (selectedModel && models.includes(selectedModel)) return selectedModel;
+  if (selectedModel === "*" || (selectedModel && models.includes(selectedModel))) return selectedModel;
   selectedModel = models.find(m => m === "or/grok-4.6") || models.find(m => /grok-4\.6/i.test(m)) || models[0] || "";
   return selectedModel;
 }
@@ -147,21 +144,23 @@ function renderPipe(s) {
 function renderFeatureControls(s) {
   const model = selectedFeatureModel(s);
   const select = document.getElementById("featureModel");
-  select.innerHTML = (s.models || []).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + '>' + esc(m) + "</option>").join("");
+  select.innerHTML = '<option value="*"' + (model === "*" ? " selected" : "") + '>All models</option>' +
+    (s.models || []).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + '>' + esc(m) + "</option>").join("");
   const active = s.features && s.features.effective && s.features.effective[model] || {};
-  document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(model || "no model selected") + '</span><span class="summary-sep">·</span><span>' + (model ? "changes apply to this exact served id" : "enable a provider to choose a model") + '</span>';
+  document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(model === "*" ? "all models" : (model || "no model selected")) + '</span><span class="summary-sep">·</span><span>' +
+    (model === "*" ? "applies to every served model, including ones added later" : (model ? "changes apply to this exact served id" : "enable a provider to choose a model")) + '</span>';
   document.getElementById("featureControls").innerHTML = featureMeta.map(row => {
     const key = row[0], modelScoped = row[4], tool = row[2] === "client" ? featureTool(s, key) : null;
     const on = !!active[key], overridden = featureOverride(s, model, key);
     const disabled = tool && !tool.available;
     const state = disabled ? "unavailable" : (on ? "on" : "off");
-    const sub = !modelScoped ? "use the global client toggle below" : (disabled ? (tool.note || "install to enable") : (overridden ? "model override" : "inherits global"));
+    const sub = !modelScoped ? "use the global client toggle below" : (disabled ? (tool.note || "install to enable") : (overridden ? (model === "*" ? "all-models policy" : "model override") : "inherits global"));
     const toggle = modelScoped ? '<label class="sw" title="toggle ' + esc(row[1]) + '"><input type="checkbox" ' + (on ? "checked" : "") + (disabled ? " disabled" : "") + ' onchange="setModelFeature(\'' + key + '\',this.checked,this)"><span class="tr"></span></label>' : '<span class="badge">global only</span>';
     return '<article class="feature-card ' + row[2] + (disabled ? " disabled" : "") + '">' +
       '<div class="feature-card-top"><div><span class="feature-kind">' + esc(row[2]) + '</span><h3>' + esc(row[1]) + '</h3></div>' +
       toggle + '</div>' +
       '<p>' + esc(row[3]) + '</p><div class="feature-foot"><span class="badge ' + (disabled ? "bad" : (on ? "ok" : "")) + '">' + state + '</span><span class="empty">' + esc(sub) + '</span>' +
-      (modelScoped && overridden ? '<button class="reset" onclick="resetModelFeature(\'' + key + '\',this)">reset</button>' : "") + '</div></article>';
+      (modelScoped && overridden ? '<button class="reset" onclick="resetModelFeature(\'' + key + '\',this)">' + (model === "*" ? "clear all" : "reset") + '</button>' : "") + '</div></article>';
   }).join("");
 }
 async function setModelFeature(feature, value, el) {
@@ -193,7 +192,7 @@ document.getElementById("featureModel").addEventListener("change", e => {
   if (window.__state) { renderPipe(window.__state); renderFeatureControls(window.__state); }
 });
 function renderQuota(s) {
-  const el = document.getElementById("quota");
+  const el = document.getElementById("quotacards");
   if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
   el.innerHTML = s.quota.map(p => {
     const res = (p.resources || []).map(r => {
@@ -204,21 +203,23 @@ function renderQuota(s) {
         '<div class="bar' + (r.paced ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
         '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
     }).join("");
-    return '<div style="margin-bottom:14px"><div class="mono" style="font-weight:600">' + esc(p.name) +
+    return '<div class="qcard"><div class="mono" style="font-weight:600">' + esc(p.name) +
       ' <span class="empty">' + esc(p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
   }).join("");
 }
-function renderRouter(s) {
-  const r = s.router;
-  document.getElementById("routersub").textContent = r.enabled ? (r.eligible ? "next → " + r.eligible : "enabled · nothing eligible") : "disabled";
-  const cands = (r.candidates || []).map(c =>
-    '<div class="cand' + (c.ok ? " next" : "") + '"><span class="clabel">' + esc(c.label) + ' <span class="empty">' + esc(c.model || "—") + " · " + esc(c.effort || "—") + '</span></span>' +
-    '<span class="why' + (c.ok ? "" : " bad") + '">' + (c.ok ? "eligible" : esc(c.reason)) + '</span></div>').join("");
-  document.getElementById("routerbody").innerHTML = cands || '<span class="empty">router disabled</span>';
-  const dec = (r.decisions || []).slice(-14).reverse().map(d =>
-    '<div class="lbl"><span class="mono">' + esc(d.correlation_id) + '</span><span>' + ago(d.at) + '</span></div>' +
-    '<div class="mono" style="margin-bottom:8px">' + esc(d.outcome) + (d.agent ? " → " + esc(d.agent) : "") + (d.reason ? ' <span class="badge">' + esc(d.reason) + "</span>" : "") + "</div>").join("");
-  document.getElementById("decisions").innerHTML = dec || '<span class="empty">no router traffic yet</span>';
+function renderPace(s) {
+  const p = s.pace || {};
+  const el = document.getElementById("pace");
+  const running = p.running || [];
+  let html = "";
+  if (running.length) {
+    html += running.map(m => '<div class="cand next"><span class="clabel">' + esc(m) + '</span><span class="why">running</span></div>').join("");
+  }
+  if (p.model) {
+    const rate = (p.tps || 0) > 0 ? (Math.round(p.tps * 10) / 10) + " tok/s" : "no rate";
+    html = '<div class="cand"><span class="clabel">' + esc(p.model) + ' <span class="empty">' + fmt(p.output_tokens || 0) + ' out · ' + (p.latency_ms || 0) + ' ms</span></span><span class="why">' + rate + '</span></div>' + html;
+  }
+  el.innerHTML = html || '<span class="empty">no completions yet</span>';
 }
 async function toggleAuth(name, disabled, el) {
   el.disabled = true;
@@ -309,7 +310,7 @@ async function refresh() {
     window.__state = s;
     document.getElementById("lock").hidden = true;
     document.getElementById("dash").hidden = false;
-    renderPipe(s); renderFeatureControls(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
+    renderPipe(s); renderFeatureControls(s); renderQuota(s); renderPace(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
     document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString() + " · auto-refresh 15s";
   } catch (e) {
     if (e.auth) {

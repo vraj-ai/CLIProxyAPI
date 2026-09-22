@@ -21,5 +21,6 @@ var routerPageHTML string
 var keysPageHTML string
 
 func withTheme(raw string) string {
-	return strings.Replace(raw, "/*THEME*/", themeCSS, 1)
+	raw = strings.Replace(raw, "/*THEME*/", themeCSS, 1)
+	return strings.Replace(raw, "/*KEYRING*/", consoleKeyJS(), 1)
 }

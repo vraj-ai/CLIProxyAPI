@@ -147,6 +147,8 @@ func modelScopedFeature(name string) bool {
 	return name == featurePxpipe || name == featureCaveman || name == featurePonytail
 }
 
+const starModelID = "*"
+
 func validModelID(model string) bool {
 	model = strings.TrimSpace(model)
 	return model != "" && len(model) <= 200 && !strings.ContainsAny(model, "\r\n")
@@ -228,9 +230,15 @@ func modelFeatureEnabled(cfg pluginConfig, model, feature string) bool {
 	}
 	state.mu.Lock()
 	policy := state.policies[model]
+	star := state.policies[starModelID]
 	state.mu.Unlock()
 	if value, ok := policy.value(feature); ok {
 		return *value
+	}
+	if model != starModelID {
+		if value, ok := star.value(feature); ok {
+			return *value
+		}
 	}
 	return defaults.value(feature)
 }
@@ -243,6 +251,32 @@ func featureValuesFor(cfg pluginConfig, model string) featureValues {
 		Headroom: modelFeatureEnabled(cfg, model, featureHeadroom),
 		RTK:      modelFeatureEnabled(cfg, model, featureRTK),
 	}
+}
+
+func effectiveFeatureMap(cfg pluginConfig, models []string) map[string]featureValues {
+	state.mu.Lock()
+	star := state.policies[starModelID]
+	state.mu.Unlock()
+	defaults := defaultFeatureDefaults(cfg)
+	effective := make(map[string]featureValues, len(models)+1)
+	for _, model := range models {
+		effective[model] = featureValuesFor(cfg, model)
+	}
+	effective[starModelID] = featureValues{
+		Pxpipe:   star.valueOr(featurePxpipe, defaults),
+		Caveman:  star.valueOr(featureCaveman, defaults),
+		Ponytail: star.valueOr(featurePonytail, defaults),
+		Headroom: defaults.value(featureHeadroom),
+		RTK:      defaults.value(featureRTK),
+	}
+	return effective
+}
+
+func (p modelFeaturePolicy) valueOr(name string, defaults featureDefaults) bool {
+	if value, ok := p.value(name); ok {
+		return *value
+	}
+	return defaults.value(name)
 }
 
 func copyPolicies() map[string]modelFeaturePolicy {
@@ -272,10 +306,7 @@ func buildFeatureState(models []string) hubFeatureState {
 	state.mu.Lock()
 	cfg := state.config
 	state.mu.Unlock()
-	effective := make(map[string]featureValues, len(models))
-	for _, model := range models {
-		effective[model] = featureValuesFor(cfg, model)
-	}
+	effective := effectiveFeatureMap(cfg, models)
 	headroomIsActive := headroomActive()
 	return hubFeatureState{
 		Defaults:  defaultFeatureDefaults(cfg),
@@ -334,6 +365,19 @@ func setModelFeature(raw []byte) ([]byte, error) {
 	}
 	if policy.Pxpipe == nil && policy.Caveman == nil && policy.Ponytail == nil && policy.Headroom == nil && policy.RTK == nil {
 		delete(policies, model)
+	}
+	if model == starModelID {
+		for key, other := range policies {
+			if key == starModelID {
+				continue
+			}
+			other.set(feature, nil)
+			if other.Pxpipe == nil && other.Caveman == nil && other.Ponytail == nil && other.Headroom == nil && other.RTK == nil {
+				delete(policies, key)
+			} else {
+				policies[key] = other
+			}
+		}
 	}
 	if err := saveModelPolicies(path, policies); err != nil {
 		state.mu.Unlock()
