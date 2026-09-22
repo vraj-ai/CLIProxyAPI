@@ -11,9 +11,6 @@
     <a href="/v0/resource/plugins/fleet/hub">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys" class="here">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
-    <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
     <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
@@ -76,9 +73,11 @@
 <div id="toast"></div>
 <script>
 const MGMT = "/v0/management";
+/*KEY*/
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = fleetConsoleKey(LS) || "";
+fleetWatchKey(LS, keyEl, function () { refresh(); });
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -246,6 +245,7 @@ async function refresh(keepTicket) {
     document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString();
   } catch (e) {
     if (e.auth) {
+      document.body.classList.remove("framed");
       document.getElementById("lock").hidden = false;
       document.getElementById("dash").hidden = true;
       document.getElementById("lockerr").textContent = keyEl.value ? "Key rejected." : "";

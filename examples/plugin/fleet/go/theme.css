@@ -1,23 +1,23 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap");
 :root {
-  --bg: #17120e;
-  --panel: #221b16;
-  --well: #2c241d;
-  --well-client: #29252b;
-  --track: #1a1511;
-  --iframe-well: #0d0b09;
-  --bg-aura: #2a1d12;
-  --bg-wash: #1b1510;
-  --line: #3d342b;
-  --ink: #f4ecdf;
-  --muted: #a89884;
-  --faint: #74675a;
-  --lamp: #e4b15a;
-  --lamp-glass: #e4b15a55;
-  --lamp-glass-soft: #e4b15a22;
-  --bad: #e25b4a;
-  --bad-glass: #e25b4a55;
-  --steel: #8fb3bf;
+  --bg: #070b14;
+  --panel: #0e1626;
+  --well: #141e32;
+  --well-client: #18243a;
+  --track: #0c1424;
+  --iframe-well: #070b14;
+  --bg-aura: #13233f;
+  --bg-wash: #0a1220;
+  --line: #243044;
+  --ink: #e7eefc;
+  --muted: #a9b7d0;
+  --faint: #7e8da8;
+  --lamp: #8eb0ff;
+  --lamp-glass: #8eb0ff55;
+  --lamp-glass-soft: #8eb0ff22;
+  --bad: #e07a68;
+  --bad-glass: #e07a6855;
+  --steel: #9ec0ff;
   --sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
   --display: "Syne", "Figtree", sans-serif;
   --mono: "DM Mono", ui-monospace, Menlo, monospace;
@@ -134,10 +134,23 @@ h2 span { font-family: var(--sans); font-size: 12px; font-weight: 500; color: va
 .lamp.on { background: var(--lamp); box-shadow: 0 0 8px var(--lamp-glass); }
 .lamp.off { background: var(--bad); }
 .lamp.idle { background: var(--steel); }
-.bar { position: relative; height: 6px; background: var(--track); border-radius: 4px; }
-.bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--lamp); border-radius: 4px; }
-.bar.behind .fill { background: var(--bad); }
-.bar .tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--ink); }
+.bar { position: relative; height: 8px; background: var(--track); border-radius: 99px; }
+.bar .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #3d6fd8, var(--lamp)); border-radius: 99px; }
+.bar.behind .fill { background: linear-gradient(90deg, #8a3d34, var(--bad)); }
+.bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); border-radius: 1px; }
+.qgrid { display: grid; gap: 10px; }
+.qcard { background: var(--well); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.qhead { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.qname { font-weight: 600; letter-spacing: -0.01em; }
+.qplan { color: var(--faint); font: 12px var(--mono); }
+.qres { margin-top: 12px; }
+.qmeta { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 6px; font: 12px var(--mono); color: var(--muted); }
+.pace { margin-top: 8px; color: var(--steel); font: 12px var(--mono); min-height: 1.2em; }
+body.framed .mast { display: none; }
+body.framed .wrap { padding-top: 12px; }
+.proof { display: grid; gap: 8px; }
+.proof .line { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.proof .line:first-child { border-top: none; }
 .lbl { display: flex; justify-content: space-between; font: 12px var(--mono); color: var(--muted); margin: 10px 0 5px; }
 .badge { font: 11px var(--mono); padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .badge.ok { color: var(--lamp); border-color: var(--lamp-glass); }

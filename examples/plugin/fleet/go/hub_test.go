@@ -29,10 +29,17 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") ||
-		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") ||
-		!strings.Contains(string(resp.Body), "global only") {
-		t.Fatalf("hub page missing panels")
+	body := string(resp.Body)
+	for _, want := range []string{"Quota", "featureModel", "featureControls", "global only", "qcard", `id="pace"`, `value="*"`, "fleetConsoleKey", "enc::v1::"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("hub page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "/v0/resource/plugins/fleet/router") || strings.Contains(body, "47821/dashboard") {
+		t.Fatal("hub still links router or the pxpipe tab")
+	}
+	if strings.Contains(body, "routerbody") {
+		t.Fatal("hub still renders the router panel")
 	}
 	if strings.Contains(string(resp.Body), `"eligible"`) && strings.Contains(string(resp.Body), `"decisions"`) && strings.Contains(string(resp.Body), "correlation_id") {
 		// hub shell must not embed live router JSON

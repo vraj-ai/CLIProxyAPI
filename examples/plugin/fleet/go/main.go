@@ -111,16 +111,23 @@ type pluginConfig struct {
 }
 
 var state = struct {
-	mu         sync.Mutex
-	config     pluginConfig
-	policies   map[string]modelFeaturePolicy
-	policyPath string
-	injections int64
-	backend    leadBackend
-	quota      quotaSource
-	decisions  []routeDecision
-	sentinels  []string
-	quotaCache struct {
+	mu               sync.Mutex
+	config           pluginConfig
+	policies         map[string]modelFeaturePolicy
+	policyPath       string
+	injections       int64
+	cavemanEdits     int64
+	ponytailEdits    int64
+	lastEditModel    string
+	lastEditAt       time.Time
+	lastEditCaveman  bool
+	lastEditPonytail bool
+	pace             paceState
+	backend          leadBackend
+	quota            quotaSource
+	decisions        []routeDecision
+	sentinels        []string
+	quotaCache       struct {
 		at       time.Time
 		snap     map[string]providerQuota
 		err      error
@@ -320,6 +327,8 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 		return interceptAfter(request)
 	case pluginabi.MethodResponseInterceptAfter:
 		return interceptModelsResponse(request)
+	case pluginabi.MethodUsageHandle:
+		return noteUsage(request)
 	case pluginabi.MethodModelRegister:
 		return okEnvelope(modelRegistration())
 	case pluginabi.MethodExecutorIdentifier:
@@ -355,10 +364,9 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 			{"Method":"POST","Path":"/fleet/pxpipe/compression"},
 			{"Method":"POST","Path":"/fleet/features"}
 		],"resources":[
-			{"Path":"/hub","Menu":"Fleet Hub","Description":"Unified control plane — quota pace, cpa router, providers, models, pxpipe scope, and fleet flags."},
-			{"Path":"/keys","Menu":"Fleet Keys","Description":"Mint OpenRouter-style API keys for the models this proxy currently serves."},
-			{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},
-			{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}
+			{"Path":"/hub","Menu":"Fleet Hub","Description":"Path controls, quota pace, and the model running through the proxy."},
+			{"Path":"/keys","Menu":"Keys","Description":"Mint API keys for the models this proxy currently serves."},
+			{"Path":"/savings","Menu":"Savings","Description":"pxpipe rows and instruction body edits. Not token or dollar savings."}
 		]}`)
 	case "management.handle":
 		var req pluginapi.ManagementRequest
@@ -376,6 +384,7 @@ type registrationCapability struct {
 	ModelRegistrar        bool     `json:"model_registrar"`
 	AuthProvider          bool     `json:"auth_provider"`
 	Executor              bool     `json:"executor"`
+	UsagePlugin           bool     `json:"usage_plugin"`
 	ExecutorModelScope    string   `json:"executor_model_scope,omitempty"`
 	ExecutorInputFormats  []string `json:"executor_input_formats,omitempty"`
 	ExecutorOutputFormats []string `json:"executor_output_formats,omitempty"`
@@ -416,6 +425,7 @@ func buildRegistration() pluginRegistration {
 			ModelRegistrar:        true,
 			AuthProvider:          true,
 			Executor:              true,
+			UsagePlugin:           true,
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeStatic),
 			ExecutorInputFormats:  []string{"openai"},
 			ExecutorOutputFormats: []string{"openai"},
@@ -446,12 +456,27 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
+		cavemanOn := modelFeatureEnabled(cfg, req.Model, featureCaveman)
+		ponytailOn := modelFeatureEnabled(cfg, req.Model, featurePonytail)
 		if injected, ok := inject(instructionTextForModel(cfg, req.Model), req.SourceFormat, body); ok {
 			body = injected
 			state.mu.Lock()
 			state.injections++
+			if cavemanOn {
+				state.cavemanEdits++
+			}
+			if ponytailOn {
+				state.ponytailEdits++
+			}
+			state.lastEditModel = req.Model
+			state.lastEditAt = time.Now()
+			state.lastEditCaveman = cavemanOn
+			state.lastEditPonytail = ponytailOn
 			state.mu.Unlock()
 		}
+	}
+	if req.Model != "" && req.Model != virtualRouterModel {
+		markRunning(req.Model)
 	}
 	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: body})
 }
@@ -512,6 +537,15 @@ type ugEvent struct {
 	OutputBytes   *int64 `json:"outputBytes"`
 }
 
+type pxRecent struct {
+	Model        string `json:"model"`
+	Compressed   bool   `json:"compressed"`
+	OrigChars    *int64 `json:"orig_chars,omitempty"`
+	OutChars     *int64 `json:"outgoing_text_chars,omitempty"`
+	InputTokens  int64  `json:"input_tokens,omitempty"`
+	OutputTokens int64  `json:"output_tokens,omitempty"`
+}
+
 type pxStats struct {
 	Requests     int64            `json:"requests"`
 	Compressed   int64            `json:"compressed"`
@@ -521,6 +555,7 @@ type pxStats struct {
 	InputTokens  int64            `json:"input_tokens"`
 	OutputTokens int64            `json:"output_tokens"`
 	ByModel      map[string]int64 `json:"saved_chars_by_model"`
+	Recent       []pxRecent       `json:"recent"`
 }
 
 type ugStats struct {
@@ -555,6 +590,7 @@ func savingsJSON() ([]byte, error) {
 		"pxpipe":                  px,
 		"subagent_context":        ug,
 		"injections_this_process": inj,
+		"instructions":            instructionProof(),
 		"note":                    "Historical local logs, not attributed to this proxy route. Character/byte reductions exclude image token cost and do not measure token or dollar savings. Injection counts record body edits, not model compliance or savings.",
 	}
 	out, err := json.Marshal(payload)
@@ -582,7 +618,7 @@ func loadSavings() (pxStats, ugStats, int64, error) {
 	}
 	savingsMemo.mu.Unlock()
 
-	px := pxStats{ByModel: map[string]int64{}}
+	px := pxStats{ByModel: map[string]int64{}, Recent: []pxRecent{}}
 
 	if f, err := os.Open(cfg.PxpipeEvents); err == nil {
 		sc := bufio.NewScanner(f)
@@ -595,6 +631,14 @@ func loadSavings() (pxStats, ugStats, int64, error) {
 			px.Requests++
 			px.InputTokens += e.InputTokens
 			px.OutputTokens += e.OutputTokens
+			px.Recent = append(px.Recent, pxRecent{
+				Model: e.Model, Compressed: e.Compressed && e.Status >= 200 && e.Status < 300,
+				OrigChars: e.OrigChars, OutChars: e.OutgoingTextChars,
+				InputTokens: e.InputTokens, OutputTokens: e.OutputTokens,
+			})
+			if len(px.Recent) > 8 {
+				px.Recent = px.Recent[len(px.Recent)-8:]
+			}
 			if e.Compressed && e.Status >= 200 && e.Status < 300 && e.OrigChars != nil && e.OutgoingTextChars != nil && *e.OrigChars > 0 && *e.OutgoingTextChars >= 0 {
 				px.Compressed++
 				px.CharsBefore += *e.OrigChars
@@ -672,6 +716,26 @@ func newSavingsView(px pxStats, ug ugStats, inj int64) savingsView {
 		return models[i].Model < models[j].Model
 	})
 	return savingsView{Px: px, Ug: ug, Injections: inj, Models: models}
+}
+
+func instructionProof() map[string]any {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	out := map[string]any{
+		"edits_this_process": state.injections,
+		"caveman_edits":      state.cavemanEdits,
+		"ponytail_edits":     state.ponytailEdits,
+		"note":               "A body edit means the instruction was inserted. It does not show that the model complied.",
+	}
+	if state.lastEditModel != "" && !state.lastEditAt.IsZero() {
+		out["last"] = map[string]any{
+			"model":    state.lastEditModel,
+			"at":       state.lastEditAt.UTC().Format(time.RFC3339),
+			"caveman":  state.lastEditCaveman,
+			"ponytail": state.lastEditPonytail,
+		}
+	}
+	return out
 }
 
 func humanize(n int64) string {

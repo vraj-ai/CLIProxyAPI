@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -180,6 +181,13 @@ func resetState(cfg pluginConfig) {
 	state.policies = nil
 	state.policyPath = ""
 	state.injections = 0
+	state.cavemanEdits = 0
+	state.ponytailEdits = 0
+	state.lastEditModel = ""
+	state.lastEditAt = time.Time{}
+	state.lastEditCaveman = false
+	state.lastEditPonytail = false
+	state.pace = paceState{}
 	state.mu.Unlock()
 }
 
@@ -265,6 +273,24 @@ func TestSavingsResourceIsHTMLShell(t *testing.T) {
 	}
 	if !strings.Contains(page, "/v0/management/fleet/savings") {
 		t.Fatal("savings shell must fetch key-gated JSON")
+	}
+	if strings.Contains(page, "<iframe") || strings.Contains(page, "/v0/resource/plugins/fleet/router") {
+		t.Fatal("savings shell still embeds pxpipe or links the router")
+	}
+	if !strings.Contains(page, "fleetConsoleKey") || !strings.Contains(page, "enc::v1::") {
+		t.Fatal("savings shell missing console key reuse")
+	}
+}
+
+func TestFleetConsoleKey(t *testing.T) {
+	page := withTheme(hubPageHTML)
+	for _, want := range []string{"fleetConsoleKey", "enc::v1::", "cli-proxy-api-webui::secure-storage", "managementKey"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("hub shell missing %q", want)
+		}
+	}
+	if strings.Contains(page, "sk-") {
+		t.Fatal("hub shell embedded a credential")
 	}
 }
 
@@ -368,6 +394,17 @@ not-json
 	}
 	if ugs["saved_pct"] != float64(40) {
 		t.Fatalf("ug saved_pct = %v", ugs["saved_pct"])
+	}
+	recent, ok := pxs["recent"].([]any)
+	if !ok || len(recent) != 4 {
+		t.Fatalf("recent = %v", pxs["recent"])
+	}
+	instructions, ok := payload["instructions"].(map[string]any)
+	if !ok {
+		t.Fatal("savings missing instruction proof")
+	}
+	if instructions["note"] == "" {
+		t.Fatal("instruction proof missing the compliance note")
 	}
 	note, _ := payload["note"].(string)
 	if !strings.Contains(note, "not attributed") || !strings.Contains(note, "not measure token or dollar") {

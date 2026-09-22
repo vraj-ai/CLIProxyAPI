@@ -135,6 +135,7 @@ type hubState struct {
 	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
 	Features    hubFeatureState    `json:"features"`
+	Pace        hubPace            `json:"pace"`
 	Keys        []publicGrant      `json:"keys"`
 }
 
@@ -481,6 +482,7 @@ func buildHubState() hubState {
 		Providers: buildProviders(cfg, auths, pluginCfg.RouterEnabled),
 		Models:    models,
 		Features:  buildFeatureState(models),
+		Pace:      currentPace(),
 		Quota:     buildQuota(),
 		Router:    buildRouterView(live),
 		Pxpipe: hubPxpipe{

@@ -317,5 +317,17 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		}
 	}
 
-	c.File(filePath)
+	if c.Request != nil && c.Request.Method == http.MethodHead {
+		c.Header("Cache-Control", "no-store")
+		c.Status(http.StatusOK)
+		return
+	}
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		log.WithError(err).Error("failed to read management control panel asset")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", InjectConsoleInk(raw))
 }

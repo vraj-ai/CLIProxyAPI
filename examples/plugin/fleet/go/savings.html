@@ -11,9 +11,6 @@
     <a href="/v0/resource/plugins/fleet/hub">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings" class="here">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
-    <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
     <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
@@ -34,16 +31,24 @@
   <table class="rows"><thead><tr><th>model</th><th>chars reduced</th></tr></thead><tbody id="models"></tbody></table>
 </div>
 <div class="board panel">
-  <h2>pxpipe live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener">open in tab</a></h2>
-  <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
+  <h2>Instruction edits<span>this process</span></h2>
+  <div class="proof" id="proof"></div>
+  <p class="meta" id="proofnote"></p>
+</div>
+<div class="board panel">
+  <h2>Recent pxpipe rows</h2>
+  <table class="rows"><thead><tr><th>model</th><th>compressed</th><th>chars</th><th>tokens</th></tr></thead><tbody id="recent"></tbody></table>
+  <p class="meta">The pxpipe dashboard stays on its own port. <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener">Open it</a> when you want the live scope view.</p>
 </div>
 </div>
 </div>
 <div id="toast"></div>
 <script>
+/*KEY*/
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = fleetConsoleKey(LS) || "";
+fleetWatchKey(LS, keyEl, function () { refresh(); });
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -72,12 +77,26 @@ async function refresh() {
     ugEl.className = "big" + ((ug.saved_pct || 0) < 0 ? " warn" : "");
     document.getElementById("ugmeta").textContent = (ug.events || 0) + " events · " + humanize(ug.bytes_before) + " → " + humanize(ug.bytes_after);
     document.getElementById("inj").textContent = s.injections_this_process || 0;
+    const proof = s.instructions || {};
+    const last = proof.last || null;
+    document.getElementById("proof").innerHTML =
+      '<div class="line"><span>caveman edits</span><span class="mono">' + (proof.caveman_edits || 0) + '</span></div>' +
+      '<div class="line"><span>ponytail edits</span><span class="mono">' + (proof.ponytail_edits || 0) + '</span></div>' +
+      '<div class="line"><span>last edit</span><span class="mono">' + (last ? esc(last.model) + (last.caveman ? " · caveman" : "") + (last.ponytail ? " · ponytail" : "") : "none this process") + '</span></div>';
+    document.getElementById("proofnote").textContent = proof.note || "";
+    const recent = px.recent || [];
+    document.getElementById("recent").innerHTML = recent.length
+      ? recent.slice().reverse().map(row => "<tr><td>" + esc(row.model || "") + "</td><td>" + (row.compressed ? "yes" : "no") + '</td><td class="mono">' +
+          (row.orig_chars == null ? "" : humanize(row.orig_chars)) + (row.outgoing_text_chars == null ? "" : " → " + humanize(row.outgoing_text_chars)) +
+          '</td><td class="mono">' + humanize(row.input_tokens || 0) + " / " + humanize(row.output_tokens || 0) + "</td></tr>").join("")
+      : '<tr><td class="empty" colspan="4">no pxpipe rows in the local log</td></tr>';
     const by = px.saved_chars_by_model || {};
     const rows = Object.keys(by).sort((a,b) => by[b]-by[a] || a.localeCompare(b));
     document.getElementById("models").innerHTML = rows.length
       ? rows.map(m => "<tr><td>" + esc(m) + '</td><td class="mono">' + humanize(by[m]) + "</td></tr>").join("")
       : '<tr><td class="empty" colspan="2">no compressed requests recorded</td></tr>';
   } catch (e) {
+    document.body.classList.remove("framed");
     document.getElementById("lock").hidden = false;
     document.getElementById("dash").hidden = true;
     document.getElementById("keyhint").textContent = e.auth ? "required" : (e.message || "failed");

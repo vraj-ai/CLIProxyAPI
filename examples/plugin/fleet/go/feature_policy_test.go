@@ -116,6 +116,65 @@ func TestSetModelFeatureDoesNotRewriteSharedPxpipeScope(t *testing.T) {
 	}
 }
 
+func TestAllModelPolicyClearsExactOverrides(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+
+	if _, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"ponytail","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"caveman","value":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"ponytail","value":false}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("all write left the exact ponytail override in place")
+	}
+	if modelFeatureEnabled(state.config, "openai/gpt-6-astra", featurePonytail) {
+		t.Fatal("a model with no exact override did not follow all")
+	}
+	if modelFeatureEnabled(state.config, "or/grok-4.6", featureCaveman) {
+		t.Fatal("all write for ponytail cleared the caveman override")
+	}
+	if !modelFeatureEnabled(state.config, "openai/gpt-6-astra", featureCaveman) {
+		t.Fatal("caveman default changed")
+	}
+
+	saved, err := loadModelPolicies(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved[policyAll].Ponytail == nil || *saved[policyAll].Ponytail {
+		t.Fatalf("all policy = %+v", saved[policyAll])
+	}
+	if saved["or/grok-4.6"].Ponytail != nil {
+		t.Fatal("exact ponytail override survived an all write")
+	}
+	if saved["or/grok-4.6"].Caveman == nil || *saved["or/grok-4.6"].Caveman {
+		t.Fatal("unrelated exact override was dropped")
+	}
+
+	calls := 0
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		calls++
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+	}
+	defer func() { hostHTTP = orig }()
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"pxpipe","value":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("all policy rewrote shared pxpipe scope: %d calls", calls)
+	}
+}
+
 func TestSetModelFeatureRejectsInvalidInput(t *testing.T) {
 	resetState(pluginConfig{})
 	for _, raw := range []string{

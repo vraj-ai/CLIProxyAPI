@@ -147,9 +147,20 @@ func modelScopedFeature(name string) bool {
 	return name == featurePxpipe || name == featureCaveman || name == featurePonytail
 }
 
+// policyAll is the path-control target that is not a served model id.
+// A value stored here applies to every model that has no exact override.
+const policyAll = "*"
+
 func validModelID(model string) bool {
 	model = strings.TrimSpace(model)
-	return model != "" && len(model) <= 200 && !strings.ContainsAny(model, "\r\n")
+	if model == policyAll {
+		return true
+	}
+	return model != "" && len(model) <= 200 && !strings.ContainsAny(model, "\r\n") && !strings.Contains(model, "*")
+}
+
+func policyEmpty(policy modelFeaturePolicy) bool {
+	return policy.Pxpipe == nil && policy.Caveman == nil && policy.Ponytail == nil && policy.Headroom == nil && policy.RTK == nil
 }
 
 func validatePolicyMap(policies map[string]modelFeaturePolicy) error {
@@ -227,9 +238,15 @@ func modelFeatureEnabled(cfg pluginConfig, model, feature string) bool {
 		return defaults.value(feature)
 	}
 	state.mu.Lock()
-	policy := state.policies[model]
+	exact := state.policies[model]
+	shared := state.policies[policyAll]
 	state.mu.Unlock()
-	if value, ok := policy.value(feature); ok {
+	if model != policyAll {
+		if value, ok := exact.value(feature); ok {
+			return *value
+		}
+	}
+	if value, ok := shared.value(feature); ok {
 		return *value
 	}
 	return defaults.value(feature)
@@ -296,6 +313,30 @@ func buildFeatureState(models []string) hubFeatureState {
 	}
 }
 
+// applyAllPolicy stores one request-layer value for every served model.
+// Exact overrides of that same feature are removed so a later model does not
+// keep a stale exception. Other features on those models stay put.
+func applyAllPolicy(policies map[string]modelFeaturePolicy, feature string, value *bool) {
+	shared := policies[policyAll]
+	shared.set(feature, value)
+	if policyEmpty(shared) {
+		delete(policies, policyAll)
+	} else {
+		policies[policyAll] = shared
+	}
+	for model, policy := range policies {
+		if model == policyAll {
+			continue
+		}
+		policy.set(feature, nil)
+		if policyEmpty(policy) {
+			delete(policies, model)
+		} else {
+			policies[model] = policy
+		}
+	}
+}
+
 func setModelFeature(raw []byte) ([]byte, error) {
 	var input map[string]json.RawMessage
 	if json.Unmarshal(raw, &input) != nil {
@@ -327,13 +368,16 @@ func setModelFeature(raw []byte) ([]byte, error) {
 	for key, policy := range state.policies {
 		policies[key] = policy
 	}
-	policy := policies[model]
-	policy.set(feature, value)
-	if policy.Pxpipe != nil || policy.Caveman != nil || policy.Ponytail != nil || policy.Headroom != nil || policy.RTK != nil {
-		policies[model] = policy
-	}
-	if policy.Pxpipe == nil && policy.Caveman == nil && policy.Ponytail == nil && policy.Headroom == nil && policy.RTK == nil {
-		delete(policies, model)
+	if model == policyAll {
+		applyAllPolicy(policies, feature, value)
+	} else {
+		policy := policies[model]
+		policy.set(feature, value)
+		if policyEmpty(policy) {
+			delete(policies, model)
+		} else {
+			policies[model] = policy
+		}
 	}
 	if err := saveModelPolicies(path, policies); err != nil {
 		state.mu.Unlock()

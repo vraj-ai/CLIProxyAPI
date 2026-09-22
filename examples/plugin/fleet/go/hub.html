@@ -14,9 +14,6 @@
     <a href="/v0/resource/plugins/fleet/hub" class="here">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
-    <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
     <input id="key" type="password" placeholder="management key" autocomplete="off" aria-label="management key">
@@ -36,20 +33,13 @@
 <div class="board panel route-controls">
   <div class="route-head">
     <div><h2>Path controls<span>exact model policy</span></h2><p class="meta">Request layers run inside Fleet. Client layers stay beside the provider path.</p></div>
-    <label class="model-picker"><span>model</span><select id="featureModel" aria-label="model for path controls"></select></label>
+    <label class="model-picker"><span>model</span><select id="featureModel" aria-label="model for path controls"></select><div id="pace" class="pace"></div></label>
   </div>
   <div id="featureSummary" class="route-summary"></div>
   <div id="featureControls" class="feature-grid"></div>
 </div>
-<div class="split board">
-  <div class="panel"><h2>Quota<span>used vs elapsed · openusage --force</span></h2>
-    <div id="quota"></div>
-  </div>
-  <div class="panel"><h2>Router<span id="routersub"></span></h2>
-    <div id="routerbody"></div>
-    <h2 style="margin-top:18px">Recent decisions</h2>
-    <div id="decisions"></div>
-  </div>
+<div class="board panel"><h2>Quota<span>used vs elapsed · openusage --force</span></h2>
+  <div id="quota" class="qgrid"></div>
 </div>
 <div class="board panel"><h2>Providers<span>toggles write through the core management API</span></h2>
   <table class="rows"><thead><tr><th>provider</th><th>kind</th><th>models</th><th>state</th><th></th></tr></thead><tbody id="providers"></tbody></table>
@@ -72,10 +62,13 @@
 </div>
 <div id="toast"></div>
 <script>
+/*KEY*/
 const MGMT = "/v0/management";
 const LS = "fleet.hub.key";
+const ALL = "*";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = fleetConsoleKey(LS) || "";
+fleetWatchKey(LS, keyEl, function () { refresh(); });
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -102,9 +95,16 @@ const featureMeta = [
 ];
 function selectedFeatureModel(s) {
   const models = s.models || [];
+  if (selectedModel === ALL) return ALL;
   if (selectedModel && models.includes(selectedModel)) return selectedModel;
   selectedModel = models.find(m => m === "or/grok-4.6") || models.find(m => /grok-4\.6/i.test(m)) || models[0] || "";
   return selectedModel;
+}
+function allFeatureValues(s) {
+  const d = (s.features && s.features.defaults) || {};
+  const star = (s.features && s.features.overrides && s.features.overrides[ALL]) || {};
+  const pick = key => Object.prototype.hasOwnProperty.call(star, key) ? !!star[key] : !!d[key];
+  return { pxpipe: pick("pxpipe"), caveman: pick("caveman"), ponytail: pick("ponytail"), headroom: !!d.headroom, rtk: !!d.rtk };
 }
 function featureOverride(s, model, key) {
   const p = (s.features && s.features.overrides && s.features.overrides[model]) || {};
@@ -128,15 +128,16 @@ function until(iso) {
 }
 function renderPipe(s) {
   const model = selectedFeatureModel(s);
-  const selected = s.features && s.features.effective && s.features.effective[model];
+  const selected = model === ALL ? allFeatureValues(s) : (s.features && s.features.effective && s.features.effective[model]);
   const fleetDetail = selected ? "pxpipe " + (selected.pxpipe ? "on" : "off") + " · caveman " + (selected.caveman ? "on" : "off") + " · ponytail " + (selected.ponytail ? "on" : "off") : "request policy";
+  const shown = model === ALL ? "all" : (model || "none selected");
   const nodes = [
     ["harness", true, "pi / any client"],
     ["pxpipe", s.pxpipe.reachable, s.pxpipe.reachable ? "47821" : "down"],
     ["shim", s.pxpipe.shim_enabled ? s.pxpipe.shim_up : null, s.pxpipe.shim_enabled ? (s.pxpipe.shim_up ? "transform" : "down") : "off"],
     ["cliproxyapi", true, "8317"],
     ["fleet plugin", true, fleetDetail],
-    ["lead", s.router.enabled ? !!s.router.eligible : null, s.router.eligible || (s.router.enabled ? "none eligible" : "router off")]
+    ["model", !!model, shown]
   ];
   document.getElementById("pipeline").innerHTML = nodes.map(n => {
     const lamp = n[1] === null ? "idle" : (n[1] ? "on" : "off");
@@ -146,16 +147,17 @@ function renderPipe(s) {
 }
 function renderFeatureControls(s) {
   const model = selectedFeatureModel(s);
+  const all = model === ALL;
   const select = document.getElementById("featureModel");
-  select.innerHTML = (s.models || []).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + '>' + esc(m) + "</option>").join("");
-  const active = s.features && s.features.effective && s.features.effective[model] || {};
-  document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(model || "no model selected") + '</span><span class="summary-sep">·</span><span>' + (model ? "changes apply to this exact served id" : "enable a provider to choose a model") + '</span>';
+  select.innerHTML = '<option value="*">all</option>' + (s.models || []).map(m => '<option value="' + esc(m) + '"' + (m === model ? " selected" : "") + '>' + esc(m) + "</option>").join("");
+  const active = all ? allFeatureValues(s) : (s.features && s.features.effective && s.features.effective[model] || {});
+  document.getElementById("featureSummary").innerHTML = '<span class="mono">' + esc(all ? "all" : (model || "no model selected")) + '</span><span class="summary-sep">·</span><span>' + (all ? "changes apply to every served id" : (model ? "changes apply to this exact served id" : "enable a provider to choose a model")) + '</span>';
   document.getElementById("featureControls").innerHTML = featureMeta.map(row => {
     const key = row[0], modelScoped = row[4], tool = row[2] === "client" ? featureTool(s, key) : null;
-    const on = !!active[key], overridden = featureOverride(s, model, key);
+    const on = !!active[key], overridden = featureOverride(s, all ? ALL : model, key);
     const disabled = tool && !tool.available;
     const state = disabled ? "unavailable" : (on ? "on" : "off");
-    const sub = !modelScoped ? "use the global client toggle below" : (disabled ? (tool.note || "install to enable") : (overridden ? "model override" : "inherits global"));
+    const sub = !modelScoped ? "use the global client toggle below" : (disabled ? (tool.note || "install to enable") : (all ? "every served model" : (overridden ? "model override" : "inherits global")));
     const toggle = modelScoped ? '<label class="sw" title="toggle ' + esc(row[1]) + '"><input type="checkbox" ' + (on ? "checked" : "") + (disabled ? " disabled" : "") + ' onchange="setModelFeature(\'' + key + '\',this.checked,this)"><span class="tr"></span></label>' : '<span class="badge">global only</span>';
     return '<article class="feature-card ' + row[2] + (disabled ? " disabled" : "") + '">' +
       '<div class="feature-card-top"><div><span class="feature-kind">' + esc(row[2]) + '</span><h3>' + esc(row[1]) + '</h3></div>' +
@@ -192,33 +194,36 @@ document.getElementById("featureModel").addEventListener("change", e => {
   selectedModel = e.target.value; sessionStorage.setItem(MODEL_LS, selectedModel);
   if (window.__state) { renderPipe(window.__state); renderFeatureControls(window.__state); }
 });
+function renderPace(s) {
+  const el = document.getElementById("pace");
+  const p = s.pace || {};
+  if (p.running_model) {
+    el.textContent = p.running_model + " running";
+    return;
+  }
+  if (!p.model) {
+    el.textContent = "no recent completion";
+    return;
+  }
+  const rate = p.tokens_per_sec ? Number(p.tokens_per_sec).toFixed(1) + " tok/s" : "no output tokens";
+  el.textContent = p.model + " · " + rate;
+}
 function renderQuota(s) {
   const el = document.getElementById("quota");
-  if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
+  if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable. Install it or check PATH.</div>'; return; }
   el.innerHTML = s.quota.map(p => {
     const res = (p.resources || []).map(r => {
       const used = r.used_frac || 0, elapsed = r.paced_frac || 0;
-      return '<div class="res"><div class="lbl"><span>' + esc(r.name) + '</span><span>' +
-        fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
-        ' <span class="badge ' + (r.paced ? "bad" : "ok") + '">' + (r.paced ? "behind pace" : "on pace") + '</span></span></div>' +
+      return '<div class="qres"><div class="qmeta"><span>' + esc(r.name) + '</span><span>' +
+        fmt(r.remaining) + "/" + fmt(r.limit) + " · resets " + (r.resets_at ? until(r.resets_at) : "unknown") +
+        ' <span class="badge ' + (r.paced ? "bad" : "ok") + '">' + (r.paced ? "behind pace" : "on pace") + "</span></span></div>" +
         '<div class="bar' + (r.paced ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
         '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
     }).join("");
-    return '<div style="margin-bottom:14px"><div class="mono" style="font-weight:600">' + esc(p.name) +
-      ' <span class="empty">' + esc(p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
+    return '<article class="qcard"><div class="qhead"><span class="qname">' + esc(p.name) + '</span><span class="qplan">' +
+      esc(p.plan || "plan unknown") + (p.stale ? " · stale" : "") + "</span></div>" +
+      (res || '<div class="empty">no resources</div>') + "</article>";
   }).join("");
-}
-function renderRouter(s) {
-  const r = s.router;
-  document.getElementById("routersub").textContent = r.enabled ? (r.eligible ? "next → " + r.eligible : "enabled · nothing eligible") : "disabled";
-  const cands = (r.candidates || []).map(c =>
-    '<div class="cand' + (c.ok ? " next" : "") + '"><span class="clabel">' + esc(c.label) + ' <span class="empty">' + esc(c.model || "—") + " · " + esc(c.effort || "—") + '</span></span>' +
-    '<span class="why' + (c.ok ? "" : " bad") + '">' + (c.ok ? "eligible" : esc(c.reason)) + '</span></div>').join("");
-  document.getElementById("routerbody").innerHTML = cands || '<span class="empty">router disabled</span>';
-  const dec = (r.decisions || []).slice(-14).reverse().map(d =>
-    '<div class="lbl"><span class="mono">' + esc(d.correlation_id) + '</span><span>' + ago(d.at) + '</span></div>' +
-    '<div class="mono" style="margin-bottom:8px">' + esc(d.outcome) + (d.agent ? " → " + esc(d.agent) : "") + (d.reason ? ' <span class="badge">' + esc(d.reason) + "</span>" : "") + "</div>").join("");
-  document.getElementById("decisions").innerHTML = dec || '<span class="empty">no router traffic yet</span>';
 }
 async function toggleAuth(name, disabled, el) {
   el.disabled = true;
@@ -236,6 +241,7 @@ async function toggleCompat(name, disabled, el) {
 }
 function renderProviders(s) {
   document.getElementById("providers").innerHTML = (s.providers || []).map((p, i) => {
+    if (p.kind === "plugin") return "";
     const dis = p.disabled;
     const label = p.kind === "plugin" ? '<span class="badge">virtual</span>' : (dis ? '<span class="badge bad">off</span>' : '<span class="badge ok">on</span>');
     const sw = '<label class="sw"><input type="checkbox" ' + (dis ? "" : "checked") + ' onchange="providerToggle(' + i + ',this.checked,this)"><span class="tr"></span></label>';
@@ -296,7 +302,7 @@ function renderKeys(s) {
 function renderFlags(s) {
   const f = s.flags;
   const d = s.features && s.features.defaults || {};
-  const rows = [["caveman", "caveman", f.caveman, "compressed replies"], ["ponytail", "ponytail", f.ponytail, "lazy solutions"], ["router", "router_enabled", f.router, "cpa router"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop"], ["Headroom", "headroom", d.headroom, "client context proxy"], ["RTK", "rtk", d.rtk, "agent shell filter"]];
+  const rows = [["caveman", "caveman", f.caveman, "compressed replies"], ["ponytail", "ponytail", f.ponytail, "lazy solutions"], ["pxpipe shim", "pxpipe_enabled", f.pxpipe, "transform hop"], ["Headroom", "headroom", d.headroom, "client context proxy"], ["RTK", "rtk", d.rtk, "agent shell filter"]];
   document.getElementById("flags").innerHTML = rows.map(r =>
     '<div class="flag"><label class="sw"><input type="checkbox" ' + (r[2] ? "checked" : "") + ' onchange="' + (r[1] === "headroom" || r[1] === "rtk" ? "setClientTool" : "setFlag") + '(\'' + r[1] + '\',' + !r[2] + ',this)"><span class="tr"></span></label><b>' + r[0] + '</b><small>' + r[3] + "</small></div>").join("");
 }
@@ -309,10 +315,11 @@ async function refresh() {
     window.__state = s;
     document.getElementById("lock").hidden = true;
     document.getElementById("dash").hidden = false;
-    renderPipe(s); renderFeatureControls(s); renderQuota(s); renderRouter(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
+    renderPipe(s); renderFeatureControls(s); renderPace(s); renderQuota(s); renderProviders(s); renderModels(s); renderKeys(s); renderFlags(s);
     document.getElementById("stamp").textContent = "updated " + new Date(s.generated_at).toLocaleTimeString() + " · auto-refresh 15s";
   } catch (e) {
     if (e.auth) {
+      document.body.classList.remove("framed");
       document.getElementById("lock").hidden = false;
       document.getElementById("dash").hidden = true;
       document.getElementById("lockerr").textContent = keyEl.value ? "Key rejected." : "";
