@@ -94,6 +94,28 @@ func TestSetModelFeaturePersistsAndResets(t *testing.T) {
 	}
 }
 
+func TestSetModelFeatureDoesNotRewriteSharedPxpipeScope(t *testing.T) {
+	resetState(pluginConfig{PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+	calls := 0
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		calls++
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	if _, err := setModelFeature([]byte(`{"model":"xai/grok-4.6","feature":"pxpipe","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("exact model policy rewrote shared pxpipe scope: %d calls", calls)
+	}
+}
+
 func TestSetModelFeatureRejectsInvalidInput(t *testing.T) {
 	resetState(pluginConfig{})
 	for _, raw := range []string{

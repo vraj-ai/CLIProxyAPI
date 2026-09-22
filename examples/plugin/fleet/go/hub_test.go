@@ -164,6 +164,31 @@ func TestPxpipeScopeToggle(t *testing.T) {
 	}
 }
 
+func TestPxpipeScopeToggleReportsLivePushFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusBadGateway}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	out, err := pxpipeScopeToggle([]byte(`{"model":"grok-4.6","on":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if json.Unmarshal(out, &env) != nil || !env.OK {
+		t.Fatalf("envelope: %s", out)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(resp.Body), "live_push_failed") {
+		t.Fatalf("response = %+v %s", resp, resp.Body)
+	}
+}
+
 func TestPxpipeTransformSkips(t *testing.T) {
 	cfg := pluginConfig{PxpipeEnabled: true, PxpipeURL: "http://shim.test"}
 	calls := 0

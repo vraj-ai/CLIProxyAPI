@@ -550,11 +550,12 @@ func pxpipeScopeSet(raw []byte) ([]byte, error) {
 	out := map[string]any{"scope": req.Models, "persisted": true}
 	if len(pushErrs) > 0 {
 		out["live_push_failed"] = pushErrs
+		return jsonResp(out, http.StatusBadGateway)
 	}
 	return jsonResp(out, http.StatusOK)
 }
 
-// pxpipeScopeToggle flips one model in the scope — the page's per-chip path.
+// pxpipeScopeToggle flips one base-model entry in the shared pxpipe scope.
 func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	var req struct {
 		Model string `json:"model"`
@@ -586,6 +587,7 @@ func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	out := map[string]any{"scope": next, "persisted": true}
 	if err := pushPxpipeModel(key, req.On); err != nil {
 		out["live_push_failed"] = []string{key}
+		return jsonResp(out, http.StatusBadGateway)
 	}
 	return jsonResp(out, http.StatusOK)
 }

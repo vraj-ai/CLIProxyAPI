@@ -335,19 +335,13 @@ func setModelFeature(raw []byte) ([]byte, error) {
 	if policy.Pxpipe == nil && policy.Caveman == nil && policy.Ponytail == nil && policy.Headroom == nil && policy.RTK == nil {
 		delete(policies, model)
 	}
-	state.mu.Unlock()
 	if err := saveModelPolicies(path, policies); err != nil {
+		state.mu.Unlock()
 		return jsonResp(map[string]string{"error": "policy_write_failed"}, http.StatusInternalServerError)
 	}
-	state.mu.Lock()
 	state.policies = policies
 	cfg := state.config
 	state.mu.Unlock()
-	if feature == featurePxpipe {
-		if _, err := pxpipeScopeToggle(json.RawMessage(fmt.Sprintf(`{"model":%q,"on":%t}`, model, modelFeatureEnabled(cfg, model, featurePxpipe)))); err != nil {
-			return jsonResp(map[string]string{"error": "pxpipe_scope_update_failed"}, http.StatusBadGateway)
-		}
-	}
 	return jsonResp(map[string]any{"model": model, "feature": feature, "value": value, "effective": featureValuesFor(cfg, model)}, http.StatusOK)
 }
 
