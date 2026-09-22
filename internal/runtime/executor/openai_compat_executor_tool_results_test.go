@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -16,15 +17,16 @@ import (
 
 func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 	tests := []struct {
-		name            string
-		stream          bool
-		inputModalities []string
-		wantString      bool
+		name             string
+		stream           bool
+		inputModalities  []string
+		wantOmittedImage bool
+		wantImage        bool
 	}{
-		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantString: true},
-		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantString: true},
-		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantString: false},
-		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantString: false},
+		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantOmittedImage: true},
+		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantOmittedImage: true},
+		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantImage: true},
+		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantImage: true},
 	}
 
 	for _, tt := range tests {
@@ -84,16 +86,18 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 			}
 
 			toolContent := gjson.GetBytes(gotBody, "messages.1.content")
-			if tt.wantString {
-				if toolContent.Type != gjson.String {
-					t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
-				}
-				want := "image inspected\n\n[image omitted: unsupported by upstream]"
-				if toolContent.String() != want {
-					t.Fatalf("tool content = %q, want %q", toolContent.String(), want)
-				}
-			} else if !toolContent.IsArray() {
-				t.Fatalf("tool content type = %s, want array; body=%s", toolContent.Type, string(gotBody))
+			if toolContent.Type != gjson.String {
+				t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
+			}
+			want := "image inspected"
+			if tt.wantOmittedImage {
+				want += "\n\n[image omitted: unsupported by upstream]"
+			}
+			if toolContent.String() != want {
+				t.Fatalf("tool content = %q, want %q", toolContent.String(), want)
+			}
+			if gotImage := strings.Contains(string(gotBody), `"image_url"`); gotImage != tt.wantImage {
+				t.Fatalf("image forwarded = %t, want %t; body=%s", gotImage, tt.wantImage, string(gotBody))
 			}
 		})
 	}
