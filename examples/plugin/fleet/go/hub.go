@@ -132,6 +132,7 @@ type hubState struct {
 	Providers   []hubProvider      `json:"providers"`
 	Models      []string           `json:"models"`
 	Quota       []hubQuotaProvider `json:"quota"`
+	Pace        paceView           `json:"pace"`
 	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
 	Features    hubFeatureState    `json:"features"`
@@ -467,6 +468,7 @@ func buildHubState() hubState {
 	cancel()
 	state.mu.Lock()
 	pluginCfg := state.config
+	pace := buildPaceView()
 	state.mu.Unlock()
 	models := servedModels(cfg)
 	return hubState{
@@ -482,6 +484,7 @@ func buildHubState() hubState {
 		Models:    models,
 		Features:  buildFeatureState(models),
 		Quota:     buildQuota(),
+		Pace:      pace,
 		Router:    buildRouterView(live),
 		Pxpipe: hubPxpipe{
 			ProxyURL:    pxpipeProxyURL,

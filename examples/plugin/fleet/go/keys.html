@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fleet keys</title>
-<style>/*THEME*/</style></head><body>
+<style>/*THEME*/</style>
+<script>/*KEYRING*/</script></head><body>
 <div class="wrap">
 <header class="mast">
   <div>
@@ -11,8 +12,6 @@
     <a href="/v0/resource/plugins/fleet/hub">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys" class="here">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
     <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
@@ -78,7 +77,7 @@
 const MGMT = "/v0/management";
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = sessionStorage.getItem(LS) || (window.consoleStoredKey && consoleStoredKey()) || "";
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);

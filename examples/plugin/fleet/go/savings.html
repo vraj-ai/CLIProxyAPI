@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fleet savings</title>
-<style>/*THEME*/</style></head><body>
+<style>/*THEME*/</style>
+<script>/*KEYRING*/</script></head><body>
 <div class="wrap">
 <header class="mast">
   <div>
@@ -11,8 +12,6 @@
     <a href="/v0/resource/plugins/fleet/hub">Hub</a>
     <a href="/v0/resource/plugins/fleet/keys">Keys</a>
     <a href="/v0/resource/plugins/fleet/savings" class="here">Savings</a>
-    <a href="/v0/resource/plugins/fleet/router">Router</a>
-    <a href="http://127.0.0.1:47821/dashboard" target="_blank" rel="noopener">pxpipe</a>
     <a href="/management.html" target="_blank" rel="noopener">Console</a>
   </nav>
   <div class="keybox">
@@ -27,15 +26,15 @@
 <div class="split board">
   <div class="panel"><h2>pxpipe compression</h2><div class="big" id="pxpct"></div><div class="meta" id="pxmeta"></div></div>
   <div class="panel"><h2>subagent context</h2><div class="big" id="ugpct"></div><div class="meta" id="ugmeta"></div></div>
-  <div class="panel"><h2>instruction injection</h2><div class="big" id="inj"></div><div class="meta">body edits this process · not model compliance</div></div>
+  <div class="panel"><h2>instruction injection</h2><div class="big" id="inj"></div><div class="meta" id="injmeta">body edits this process · not model compliance</div></div>
 </div>
 <div class="board panel">
   <h2>text characters reduced by model</h2>
   <table class="rows"><thead><tr><th>model</th><th>chars reduced</th></tr></thead><tbody id="models"></tbody></table>
 </div>
 <div class="board panel">
-  <h2>pxpipe live dashboard · <a href="http://127.0.0.1:47821/" target="_blank" rel="noopener">open in tab</a></h2>
-  <iframe src="http://127.0.0.1:47821/" title="pxpipe live dashboard" loading="lazy"></iframe>
+  <h2>recent pxpipe rows</h2>
+  <table class="rows"><thead><tr><th>model</th><th>status</th><th>compressed</th><th>in → out chars</th></tr></thead><tbody id="pxrows"></tbody></table>
 </div>
 </div>
 </div>
@@ -43,7 +42,7 @@
 <script>
 const LS = "fleet.hub.key";
 const keyEl = document.getElementById("key");
-keyEl.value = sessionStorage.getItem(LS) || "";
+keyEl.value = sessionStorage.getItem(LS) || (window.consoleStoredKey && consoleStoredKey()) || "";
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(); } });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -72,11 +71,21 @@ async function refresh() {
     ugEl.className = "big" + ((ug.saved_pct || 0) < 0 ? " warn" : "");
     document.getElementById("ugmeta").textContent = (ug.events || 0) + " events · " + humanize(ug.bytes_before) + " → " + humanize(ug.bytes_after);
     document.getElementById("inj").textContent = s.injections_this_process || 0;
+    const lastEdit = s.last_instruction_edit;
+    document.getElementById("injmeta").textContent =
+      (lastEdit && lastEdit.model ? "last edited " + lastEdit.model : "no edit recorded") +
+      " · body edits are not model compliance";
     const by = px.saved_chars_by_model || {};
     const rows = Object.keys(by).sort((a,b) => by[b]-by[a] || a.localeCompare(b));
     document.getElementById("models").innerHTML = rows.length
       ? rows.map(m => "<tr><td>" + esc(m) + '</td><td class="mono">' + humanize(by[m]) + "</td></tr>").join("")
       : '<tr><td class="empty" colspan="2">no compressed requests recorded</td></tr>';
+    const recent = s.recent_pxpipe || [];
+    document.getElementById("pxrows").innerHTML = recent.length
+      ? recent.map(r => "<tr><td>" + esc(r.model || "—") + '</td><td class="mono">' + esc(String(r.status || "")) +
+          '</td><td>' + (r.compressed ? "yes" : "no") + '</td><td class="mono">' +
+          humanize(r.orig_chars || 0) + " → " + humanize(r.outgoing_text_chars || 0) + "</td></tr>").join("")
+      : '<tr><td class="empty" colspan="4">no pxpipe rows recorded</td></tr>';
   } catch (e) {
     document.getElementById("lock").hidden = false;
     document.getElementById("dash").hidden = true;

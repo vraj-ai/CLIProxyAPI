@@ -29,13 +29,18 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") ||
+	if !strings.Contains(string(resp.Body), "Quota") || !strings.Contains(string(resp.Body), `id="pace"`) ||
 		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") ||
 		!strings.Contains(string(resp.Body), "global only") {
 		t.Fatalf("hub page missing panels")
 	}
-	if strings.Contains(string(resp.Body), `"eligible"`) && strings.Contains(string(resp.Body), `"decisions"`) && strings.Contains(string(resp.Body), "correlation_id") {
-		// hub shell must not embed live router JSON
+	if strings.Contains(string(resp.Body), "routerbody") || strings.Contains(string(resp.Body), "Recent decisions") ||
+		strings.Contains(string(resp.Body), `id="decisions"`) {
+		t.Fatal("hub shell must not render the router panel")
+	}
+	if strings.Contains(string(resp.Body), `href="http://127.0.0.1:47821`) ||
+		strings.Contains(string(resp.Body), `href="/v0/resource/plugins/fleet/router"`) {
+		t.Fatal("hub shell must not link to the pxpipe tab or the router page")
 	}
 }
 

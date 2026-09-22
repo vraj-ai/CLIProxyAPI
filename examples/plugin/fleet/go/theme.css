@@ -1,23 +1,23 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600&family=Syne:wght@700&display=swap");
 :root {
-  --bg: #17120e;
-  --panel: #221b16;
-  --well: #2c241d;
-  --well-client: #29252b;
-  --track: #1a1511;
-  --iframe-well: #0d0b09;
-  --bg-aura: #2a1d12;
-  --bg-wash: #1b1510;
-  --line: #3d342b;
-  --ink: #f4ecdf;
-  --muted: #a89884;
-  --faint: #74675a;
-  --lamp: #e4b15a;
-  --lamp-glass: #e4b15a55;
-  --lamp-glass-soft: #e4b15a22;
-  --bad: #e25b4a;
-  --bad-glass: #e25b4a55;
-  --steel: #8fb3bf;
+  --bg: #05070c;
+  --panel: #0a0f18;
+  --well: #101826;
+  --well-client: #131c2e;
+  --track: #0a0f18;
+  --iframe-well: #03050a;
+  --bg-aura: #0c1830;
+  --bg-wash: #070b12;
+  --line: #1b2a40;
+  --ink: #e9eef7;
+  --muted: #8fa3c0;
+  --faint: #5a708c;
+  --lamp: #4d9fff;
+  --lamp-glass: #4d9fff55;
+  --lamp-glass-soft: #4d9fff22;
+  --bad: #f2665c;
+  --bad-glass: #f2665c55;
+  --steel: #8fc2ff;
   --sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
   --display: "Syne", "Figtree", sans-serif;
   --mono: "DM Mono", ui-monospace, Menlo, monospace;
@@ -84,6 +84,9 @@ h2 span { font-family: var(--sans); font-size: 12px; font-weight: 500; color: va
 .board { margin-top: 22px; }
 .split { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 18px; }
 @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+.quotacards { display: grid; gap: 10px; }
+.qcard { background: var(--well); border: 1px solid var(--line); border-radius: 11px; padding: 12px; }
+.pace .cand:first-child { border-top: none; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);

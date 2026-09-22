@@ -140,3 +140,96 @@ func TestSetModelFeatureRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func TestAllModelPolicyStarAndExactPrecedence(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"ponytail","value":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("star policy must apply to a model with no exact override")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featureCaveman) {
+		t.Fatal("unrelated feature must keep its default")
+	}
+
+	if _, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"ponytail","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("exact override must win over star")
+	}
+	if modelFeatureEnabled(state.config, "or/kimi-k2.7", featurePonytail) {
+		t.Fatal("models without an exact override still follow star")
+	}
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"ponytail","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	state.mu.Lock()
+	policy := state.policies["or/grok-4.6"]
+	state.mu.Unlock()
+	if _, ok := policy.value(featurePonytail); ok {
+		t.Fatal("All write must clear exact overrides for that feature")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("after All write the model must follow star")
+	}
+}
+
+func TestAllModelPolicyDoesNotCallPxpipeScope(t *testing.T) {
+	resetState(pluginConfig{PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+	calls := 0
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		calls++
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"pxpipe","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("All write called the pxpipe scope API: %d calls", calls)
+	}
+}
+
+func TestAllModelPolicyRejectsGlobalFeatures(t *testing.T) {
+	resetState(pluginConfig{})
+	for _, raw := range []string{
+		`{"model":"*","feature":"headroom","value":true}`,
+		`{"model":"*","feature":"rtk","value":false}`,
+	} {
+		out, err := setModelFeature([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env envelope
+		if json.Unmarshal(out, &env) != nil || !env.OK {
+			t.Fatalf("expected structured rejection for %s", raw)
+		}
+		var resp pluginapi.ManagementResponse
+		if err := json.Unmarshal(env.Result, &resp); err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(resp.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusBadRequest || body.Error != "feature_is_global_only" {
+			t.Fatalf("response = %s", out)
+		}
+	}
+}
