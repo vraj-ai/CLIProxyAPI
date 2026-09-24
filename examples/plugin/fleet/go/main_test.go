@@ -259,23 +259,23 @@ func TestSavingsResourceIsHTMLShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(resp.Body)
-	if !strings.Contains(page, "Unlock savings") {
-		t.Fatal("savings shell missing lock copy")
+	if !strings.Contains(page, "Unlock the board") {
+		t.Fatal("fleet shell missing lock copy")
 	}
 	if strings.Contains(page, `"pxpipe"`) && strings.Contains(page, `"saved_pct"`) {
-		t.Fatal("savings resource leaked telemetry JSON")
+		t.Fatal("fleet shell leaked telemetry JSON")
 	}
 	if !strings.Contains(page, "/v0/management/fleet/savings") {
-		t.Fatal("savings shell must fetch key-gated JSON")
+		t.Fatal("fleet shell must fetch key-gated savings JSON")
 	}
 	if !strings.Contains(page, `id="pxrows"`) {
-		t.Fatal("savings shell missing recent pxpipe rows")
+		t.Fatal("fleet shell missing recent pxpipe rows")
 	}
 	if !strings.Contains(page, "not model compliance") {
-		t.Fatal("savings shell must state that a body edit is not model compliance")
+		t.Fatal("fleet shell must state that a body edit is not model compliance")
 	}
-	if strings.Contains(page, "<iframe") || strings.Contains(page, "47821") || strings.Contains(page, "/fleet/router") {
-		t.Fatal("savings shell must not embed the pxpipe page or link the router page")
+	if !strings.Contains(page, `id="tab-activity"`) || !strings.Contains(page, `id="tab-providers"`) {
+		t.Fatal("fleet shell must carry the unified tabs")
 	}
 }
 

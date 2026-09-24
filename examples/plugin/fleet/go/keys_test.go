@@ -373,7 +373,7 @@ func TestKeysPageIsHTMLShell(t *testing.T) {
 	if !strings.Contains(page, "/v0/management") || !strings.Contains(page, "/fleet/keys") {
 		t.Fatal("keys shell must fetch key-gated JSON")
 	}
-	if !strings.Contains(page, `class="here"`) || !strings.Contains(page, "Hub") {
-		t.Fatal("keys nav missing switchboard links")
+	if !strings.Contains(page, `data-tab="keys"`) || !strings.Contains(page, `data-tab="overview"`) {
+		t.Fatal("fleet shell nav missing unified tabs")
 	}
 }

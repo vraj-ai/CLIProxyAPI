@@ -22,10 +22,12 @@ func TestInjectConsoleInk(t *testing.T) {
 	for _, want := range []string{
 		`id="fleet-console-ink"`,
 		`id="fleet-console-rail"`,
-		"--fleet-bg:#05070c",
-		`/v0/resource/plugins/fleet/hub`,
-		`/v0/resource/plugins/fleet/keys`,
-		`/v0/resource/plugins/fleet/savings`,
+		"--fleet-bg:#04060b",
+		`/v0/resource/plugins/fleet/hub#/overview`,
+		`/v0/resource/plugins/fleet/hub#/providers`,
+		`/v0/resource/plugins/fleet/hub#/activity`,
+		`id="fleet-status"`,
+		`rail-brand`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Fatalf("injection missing %s", want)

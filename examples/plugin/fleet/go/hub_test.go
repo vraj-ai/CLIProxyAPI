@@ -31,16 +31,12 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	}
 	if !strings.Contains(string(resp.Body), "Quota") || !strings.Contains(string(resp.Body), `id="pace"`) ||
 		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") ||
-		!strings.Contains(string(resp.Body), "global only") {
-		t.Fatalf("hub page missing panels")
+		!strings.Contains(string(resp.Body), "global only") || !strings.Contains(string(resp.Body), `id="tab-providers"`) ||
+		!strings.Contains(string(resp.Body), `id="tab-activity"`) || !strings.Contains(string(resp.Body), `id="consoleframe"`) {
+		t.Fatalf("hub shell missing panels")
 	}
-	if strings.Contains(string(resp.Body), "routerbody") || strings.Contains(string(resp.Body), "Recent decisions") ||
-		strings.Contains(string(resp.Body), `id="decisions"`) {
-		t.Fatal("hub shell must not render the router panel")
-	}
-	if strings.Contains(string(resp.Body), `href="http://127.0.0.1:47821`) ||
-		strings.Contains(string(resp.Body), `href="/v0/resource/plugins/fleet/router"`) {
-		t.Fatal("hub shell must not link to the pxpipe tab or the router page")
+	if !strings.Contains(string(resp.Body), `id="decisions"`) || !strings.Contains(string(resp.Body), `id="tab-activity"`) {
+		t.Fatal("unified shell must carry router decisions inside the Activity tab")
 	}
 }
 
@@ -79,6 +75,24 @@ func TestResourceRouterIsHTMLShell(t *testing.T) {
 	}
 	if strings.Contains(string(resp.Body), `"readiness"`) {
 		t.Fatal("resource /router leaked diagnostics JSON")
+	}
+	// All legacy resource paths serve the same Fleet shell deep-linked by hash.
+	for _, p := range []string{"/v0/resource/plugins/fleet/savings", "/v0/resource/plugins/fleet/keys", "/v0/resource/plugins/fleet/hub"} {
+		out, err := managementDispatch(&pluginapi.ManagementRequest{Method: http.MethodGet, Path: p}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e2 envelope
+		if err := json.Unmarshal(out, &e2); err != nil || !e2.OK {
+			t.Fatalf("envelope for %s: %s", p, out)
+		}
+		var r2 pluginapi.ManagementResponse
+		if err := json.Unmarshal(e2.Result, &r2); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(r2.Body), `id="tab-providers"`) {
+			t.Fatalf("%s did not serve the Fleet shell", p)
+		}
 	}
 }
 

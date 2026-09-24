@@ -642,17 +642,14 @@ func fleetRelPath(path string) (kind, rel string) {
 
 // managementDispatch routes resource HTML shells (unauthenticated) and
 // management JSON/writes (key-gated by the host) by exact registered path.
+// All resource surfaces serve the single Fleet shell; deep links are hash tabs.
+func shellPage() ([]byte, error) { return htmlPage(withTheme(hubPageHTML)) }
+
 func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, error) {
 	kind, rel := fleetRelPath(req.Path)
 	switch {
-	case kind == "resource" && rel == "/hub":
-		return htmlPage(withTheme(hubPageHTML))
-	case kind == "resource" && rel == "/savings":
-		return htmlPage(withTheme(savingsPageHTML))
-	case kind == "resource" && rel == "/router":
-		return htmlPage(withTheme(routerPageHTML))
-	case kind == "resource" && rel == "/keys":
-		return htmlPage(withTheme(keysPageHTML))
+	case kind == "resource" && (rel == "/hub" || rel == "/" || rel == "/savings" || rel == "/router" || rel == "/keys"):
+		return shellPage()
 	case kind == "management" && rel == "/fleet/state":
 		return hubStateHandler()
 	case kind == "management" && rel == "/fleet/savings":
