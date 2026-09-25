@@ -527,15 +527,27 @@ document.getElementById("logsload").addEventListener("click", async () => {
   try { const t = await api("/logs?limit=120"); document.getElementById("logs").textContent = typeof t === "string" ? t : JSON.stringify(t, null, 2); document.getElementById("logsmsg").textContent = "loaded"; }
   catch (e) { document.getElementById("logsmsg").textContent = e.message; }
 });
-/* refresh */
+/* refresh — never touch the network without a key. The proxy bans an IP
+   after 5 failed management attempts, so one probe gates the fan-out and a
+   rejected key stops the poller instead of burning attempts every 15s. */
+function showLock(msg) {
+  document.getElementById("lock").hidden = false;
+  document.getElementById("dash").hidden = true;
+  document.getElementById("lockerr").textContent = msg || "";
+}
+let pollTimer = null;
+function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+function startPoll() { stopPoll(); pollTimer = setInterval(() => { if (keyEl.value) refresh(false); }, 15000); }
 keyEl.addEventListener("change", () => { sessionStorage.setItem(LS, keyEl.value); refresh(true); });
 keyEl.addEventListener("keydown", e => { if (e.key === "Enter") { sessionStorage.setItem(LS, keyEl.value); refresh(true); } });
 let inflight = false;
 async function refresh(force) {
+  if (!keyEl.value) { showLock(""); stopPoll(); return; }
   if (inflight && !force) return; inflight = true;
   try {
-    const [s, k, auths, compat, apikeys] = await Promise.all([
-      api("/fleet/state"), api("/fleet/keys"),
+    const s = await api("/fleet/state");
+    const [k, auths, compat, apikeys] = await Promise.all([
+      api("/fleet/keys"),
       api("/auth-files").catch(() => null),
       api("/openai-compatibility").catch(() => null),
       Promise.all(["/gemini-api-key", "/claude-api-key", "/codex-api-key", "/xai-api-key", "/interactions-api-key", "/vertex-api-key"].map(p => api(p).catch(() => null))).then(a => ({"gemini-api-key": a[0], "claude-api-key": a[1], "codex-api-key": a[2], "xai-api-key": a[3], "interactions-api-key": a[4], "vertex-api-key": a[5]}))
@@ -553,16 +565,16 @@ async function refresh(force) {
     const now = new Date(s.generated_at).toLocaleTimeString();
     document.getElementById("stamp").textContent = "updated " + now + " · auto-refresh 15s";
     document.getElementById("stamp2").textContent = "updated " + now;
+    startPoll();
   } catch (e) {
     if (e.auth) {
-      document.getElementById("lock").hidden = false;
-      document.getElementById("dash").hidden = true;
-      document.getElementById("lockerr").textContent = keyEl.value ? "Key rejected." : "";
+      showLock(keyEl.value ? "Key rejected — polling stopped. Fix the key, then press Enter." : "");
+      stopPoll();
     } else toast("state fetch failed: " + e.message, "err");
   }
   inflight = false;
 }
-showTab(); syncMode(); refresh();
-setInterval(() => refresh(false), 15000);
+showTab(); syncMode();
+if (keyEl.value) refresh(true); else showLock("");
 })();
 </script></body></html>

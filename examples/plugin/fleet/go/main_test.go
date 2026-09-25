@@ -279,6 +279,26 @@ func TestSavingsResourceIsHTMLShell(t *testing.T) {
 	}
 }
 
+// The proxy bans an IP after 5 failed management attempts, so the shell
+// must never fire requests without a key: no poll on lock screen, one
+// probe gating the fan-out, and the poller stopped on key rejection.
+func TestShellNeverPollsWithoutKey(t *testing.T) {
+	page := withTheme(hubPageHTML)
+	for _, want := range []string{
+		"if (!keyEl.value) { showLock",
+		"stopPoll()",
+		"startPoll()",
+		"if (keyEl.value) refresh(true); else showLock",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("fleet shell missing poll guard %q", want)
+		}
+	}
+	if strings.Contains(page, "setInterval(() => refresh(false), 15000)") {
+		t.Fatal("fleet shell must not run an unconditional poller")
+	}
+}
+
 func TestSavingsViewSortsModels(t *testing.T) {
 	v := newSavingsView(pxStats{ByModel: map[string]int64{
 		"b": 100, "a": 100, "z": 5,
