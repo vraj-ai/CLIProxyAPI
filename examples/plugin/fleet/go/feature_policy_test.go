@@ -1,0 +1,235 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+)
+
+func TestModelFeaturePolicyInheritsAndOverrides(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true, ClientTools: clientToolConfig{Headroom: true, RTK: true}})
+	falseValue := false
+	state.mu.Lock()
+	state.policies = map[string]modelFeaturePolicy{
+		"or/grok-4.6": {Ponytail: &falseValue, Headroom: &falseValue, RTK: &falseValue},
+	}
+	state.mu.Unlock()
+
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featureCaveman) {
+		t.Fatal("model did not inherit caveman default")
+	}
+	if modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("model override did not disable ponytail")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePxpipe) {
+		t.Fatal("model did not inherit pxpipe default")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featureHeadroom) || !modelFeatureEnabled(state.config, "or/grok-4.6", featureRTK) {
+		t.Fatal("client layers must inherit global defaults")
+	}
+}
+
+func TestInterceptUsesExactModelInstructionPolicy(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true})
+	falseValue := false
+	state.mu.Lock()
+	state.policies = map[string]modelFeaturePolicy{"or/grok-4.6": {Ponytail: &falseValue}}
+	state.mu.Unlock()
+	resp := runIntercept(t, pluginabi.MethodRequestInterceptBefore, pluginapi.RequestInterceptRequest{
+		SourceFormat: "openai",
+		Model:        "or/grok-4.6",
+		Body:         []byte(`{"model":"or/grok-4.6","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if !strings.Contains(string(resp.Body), cavemanText) || strings.Contains(string(resp.Body), ponytailText) {
+		t.Fatalf("policy was not applied to request body: %s", resp.Body)
+	}
+}
+
+func TestSetModelFeaturePersistsAndResets(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+
+	out, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"ponytail","value":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+		t.Fatalf("set envelope: %v %s", err, out)
+	}
+	var saved featurePolicyFile
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &saved); err != nil || saved.Policies["or/grok-4.6"].Ponytail == nil || *saved.Policies["or/grok-4.6"].Ponytail {
+		t.Fatalf("saved policy = %+v", saved)
+	}
+
+	if _, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"ponytail","value":null}`)); err != nil {
+		t.Fatal(err)
+	}
+	policies, err := loadModelPolicies(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != 0 {
+		t.Fatalf("reset left policies = %+v", policies)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("policy mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestSetModelFeatureDoesNotRewriteSharedPxpipeScope(t *testing.T) {
+	resetState(pluginConfig{PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+	calls := 0
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		calls++
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	if _, err := setModelFeature([]byte(`{"model":"xai/grok-4.6","feature":"pxpipe","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("exact model policy rewrote shared pxpipe scope: %d calls", calls)
+	}
+}
+
+func TestSetModelFeatureRejectsInvalidInput(t *testing.T) {
+	resetState(pluginConfig{})
+	for _, raw := range []string{
+		`{"model":"or/grok-4.6","feature":"nope","value":true}`,
+		`{"model":"or/grok-4.6","feature":"ponytail","value":"yes"}`,
+		`{"model":"or/grok-4.6","feature":"headroom","value":true}`,
+		`{"model":"or/grok-4.6","feature":"rtk","value":false}`,
+	} {
+		out, err := setModelFeature([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env envelope
+		if json.Unmarshal(out, &env) != nil || !env.OK {
+			t.Fatalf("expected structured rejection for %s", raw)
+		}
+		var resp struct {
+			StatusCode int
+		}
+		if err := json.Unmarshal(env.Result, &resp); err != nil || resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("response = %s", out)
+		}
+	}
+}
+
+func TestAllModelPolicyStarAndExactPrecedence(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: true, PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"ponytail","value":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("star policy must apply to a model with no exact override")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featureCaveman) {
+		t.Fatal("unrelated feature must keep its default")
+	}
+
+	if _, err := setModelFeature([]byte(`{"model":"or/grok-4.6","feature":"ponytail","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("exact override must win over star")
+	}
+	if modelFeatureEnabled(state.config, "or/kimi-k2.7", featurePonytail) {
+		t.Fatal("models without an exact override still follow star")
+	}
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"ponytail","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	state.mu.Lock()
+	policy := state.policies["or/grok-4.6"]
+	state.mu.Unlock()
+	if _, ok := policy.value(featurePonytail); ok {
+		t.Fatal("All write must clear exact overrides for that feature")
+	}
+	if !modelFeatureEnabled(state.config, "or/grok-4.6", featurePonytail) {
+		t.Fatal("after All write the model must follow star")
+	}
+}
+
+func TestAllModelPolicyDoesNotCallPxpipeScope(t *testing.T) {
+	resetState(pluginConfig{PxpipeEnabled: true})
+	path := filepath.Join(t.TempDir(), "fleet-policies.json")
+	state.mu.Lock()
+	state.policyPath = path
+	state.mu.Unlock()
+	calls := 0
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		calls++
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	if _, err := setModelFeature([]byte(`{"model":"*","feature":"pxpipe","value":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("All write called the pxpipe scope API: %d calls", calls)
+	}
+}
+
+func TestAllModelPolicyRejectsGlobalFeatures(t *testing.T) {
+	resetState(pluginConfig{})
+	for _, raw := range []string{
+		`{"model":"*","feature":"headroom","value":true}`,
+		`{"model":"*","feature":"rtk","value":false}`,
+	} {
+		out, err := setModelFeature([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env envelope
+		if json.Unmarshal(out, &env) != nil || !env.OK {
+			t.Fatalf("expected structured rejection for %s", raw)
+		}
+		var resp pluginapi.ManagementResponse
+		if err := json.Unmarshal(env.Result, &resp); err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(resp.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusBadRequest || body.Error != "feature_is_global_only" {
+			t.Fatalf("response = %s", out)
+		}
+	}
+}

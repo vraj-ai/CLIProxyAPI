@@ -49,7 +49,94 @@ func NormalizeOpenAIToolResultsTextOnly(payload []byte) []byte {
 		messageIndex++
 		return true
 	})
+	return removeTranslatedToolResultImages(out)
+}
+
+// removeTranslatedToolResultImages catches the Claude translator's tool-image
+// shape: a tool text message followed by its synthetic image-only user message.
+func removeTranslatedToolResultImages(payload []byte) []byte {
+	messages := gjson.GetBytes(payload, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return payload
+	}
+
+	out := payload
+	toolIndex := -1
+	removals := []int{}
+	messageIndex := 0
+	messages.ForEach(func(_, message gjson.Result) bool {
+		switch message.Get("role").String() {
+		case "tool":
+			toolIndex = messageIndex
+		case "user":
+			if toolIndex >= 0 {
+				parts := translatedToolImageParts(message.Get("content"))
+				if len(parts) == 0 {
+					toolIndex = -1
+					break
+				}
+				path := fmt.Sprintf("messages.%d.content", toolIndex)
+				content := gjson.GetBytes(out, path).String()
+				if !strings.Contains(content, openAIToolResultImageOmittedText) {
+					if content != "" {
+						content += "\n\n"
+					}
+					if updated, errSet := sjson.SetBytes(out, path, content+openAIToolResultImageOmittedText); errSet == nil {
+						out = updated
+					}
+				}
+				for i := len(message.Get("content").Array()) - 1; i >= 0; i-- {
+					if parts[i] {
+						if updated, errDelete := sjson.DeleteBytes(out, fmt.Sprintf("messages.%d.content.%d", messageIndex, i)); errDelete == nil {
+							out = updated
+						}
+					}
+				}
+				if len(gjson.GetBytes(out, fmt.Sprintf("messages.%d.content", messageIndex)).Array()) == 0 {
+					removals = append(removals, messageIndex)
+				}
+			}
+			toolIndex = -1
+		default:
+			toolIndex = -1
+		}
+		messageIndex++
+		return true
+	})
+	for i := len(removals) - 1; i >= 0; i-- {
+		if updated, errDelete := sjson.DeleteBytes(out, fmt.Sprintf("messages.%d", removals[i])); errDelete == nil {
+			out = updated
+		}
+	}
 	return out
+}
+
+func translatedToolImageParts(content gjson.Result) map[int]bool {
+	if !content.IsArray() {
+		return nil
+	}
+	parts := map[int]bool{}
+	hasLabel := false
+	hasImage := false
+	index := 0
+	content.ForEach(func(_, item gjson.Result) bool {
+		if item.Get("type").String() == "text" && item.Get("text").String() == "Images returned by the preceding tool call(s):" {
+			hasLabel = true
+			parts[index] = true
+			index++
+			return true
+		}
+		if isOpenAIImageToolResultPart(item) {
+			hasImage = true
+			parts[index] = true
+		}
+		index++
+		return true
+	})
+	if hasLabel && hasImage {
+		return parts
+	}
+	return nil
 }
 
 func openAICompatibilityModelExcludesImages(models []config.OpenAICompatibilityModel, model string) (bool, bool) {

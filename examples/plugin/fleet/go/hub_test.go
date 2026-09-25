@@ -29,11 +29,14 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	if !strings.Contains(string(resp.Body), "Router") || !strings.Contains(string(resp.Body), "Quota") {
-		t.Fatalf("hub page missing panels")
+	if !strings.Contains(string(resp.Body), "Quota") || !strings.Contains(string(resp.Body), `id="pace"`) ||
+		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") ||
+		!strings.Contains(string(resp.Body), "global only") || !strings.Contains(string(resp.Body), `id="tab-providers"`) ||
+		!strings.Contains(string(resp.Body), `id="tab-activity"`) || !strings.Contains(string(resp.Body), `id="consoleframe"`) {
+		t.Fatalf("hub shell missing panels")
 	}
-	if strings.Contains(string(resp.Body), `"eligible"`) && strings.Contains(string(resp.Body), `"decisions"`) && strings.Contains(string(resp.Body), "correlation_id") {
-		// hub shell must not embed live router JSON
+	if !strings.Contains(string(resp.Body), `id="decisions"`) || !strings.Contains(string(resp.Body), `id="tab-activity"`) {
+		t.Fatal("unified shell must carry router decisions inside the Activity tab")
 	}
 }
 
@@ -72,6 +75,24 @@ func TestResourceRouterIsHTMLShell(t *testing.T) {
 	}
 	if strings.Contains(string(resp.Body), `"readiness"`) {
 		t.Fatal("resource /router leaked diagnostics JSON")
+	}
+	// All legacy resource paths serve the same Fleet shell deep-linked by hash.
+	for _, p := range []string{"/v0/resource/plugins/fleet/savings", "/v0/resource/plugins/fleet/keys", "/v0/resource/plugins/fleet/hub"} {
+		out, err := managementDispatch(&pluginapi.ManagementRequest{Method: http.MethodGet, Path: p}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e2 envelope
+		if err := json.Unmarshal(out, &e2); err != nil || !e2.OK {
+			t.Fatalf("envelope for %s: %s", p, out)
+		}
+		var r2 pluginapi.ManagementResponse
+		if err := json.Unmarshal(e2.Result, &r2); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(r2.Body), `id="tab-providers"`) {
+			t.Fatalf("%s did not serve the Fleet shell", p)
+		}
 	}
 }
 
@@ -159,6 +180,31 @@ func TestPxpipeScopeToggle(t *testing.T) {
 	}
 	if len(pushed) != 1 || !pushed[0] {
 		t.Fatalf("live push = %v", pushed)
+	}
+}
+
+func TestPxpipeScopeToggleReportsLivePushFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	orig := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusBadGateway}, nil
+	}
+	defer func() { hostHTTP = orig }()
+
+	out, err := pxpipeScopeToggle([]byte(`{"model":"grok-4.6","on":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if json.Unmarshal(out, &env) != nil || !env.OK {
+		t.Fatalf("envelope: %s", out)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(resp.Body), "live_push_failed") {
+		t.Fatalf("response = %+v %s", resp, resp.Body)
 	}
 }
 

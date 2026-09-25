@@ -132,8 +132,10 @@ type hubState struct {
 	Providers   []hubProvider      `json:"providers"`
 	Models      []string           `json:"models"`
 	Quota       []hubQuotaProvider `json:"quota"`
+	Pace        paceView           `json:"pace"`
 	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
+	Features    hubFeatureState    `json:"features"`
 	Keys        []publicGrant      `json:"keys"`
 }
 
@@ -466,7 +468,9 @@ func buildHubState() hubState {
 	cancel()
 	state.mu.Lock()
 	pluginCfg := state.config
+	pace := buildPaceView()
 	state.mu.Unlock()
+	models := servedModels(cfg)
 	return hubState{
 		GeneratedAt: nowFunc().UTC().Format(time.RFC3339),
 		Link:        "http://127.0.0.1:8317",
@@ -477,8 +481,10 @@ func buildHubState() hubState {
 			Pxpipe:   pluginCfg.PxpipeEnabled,
 		},
 		Providers: buildProviders(cfg, auths, pluginCfg.RouterEnabled),
-		Models:    servedModels(cfg),
+		Models:    models,
+		Features:  buildFeatureState(models),
 		Quota:     buildQuota(),
+		Pace:      pace,
 		Router:    buildRouterView(live),
 		Pxpipe: hubPxpipe{
 			ProxyURL:    pxpipeProxyURL,
@@ -547,11 +553,12 @@ func pxpipeScopeSet(raw []byte) ([]byte, error) {
 	out := map[string]any{"scope": req.Models, "persisted": true}
 	if len(pushErrs) > 0 {
 		out["live_push_failed"] = pushErrs
+		return jsonResp(out, http.StatusBadGateway)
 	}
 	return jsonResp(out, http.StatusOK)
 }
 
-// pxpipeScopeToggle flips one model in the scope — the page's per-chip path.
+// pxpipeScopeToggle flips one base-model entry in the shared pxpipe scope.
 func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	var req struct {
 		Model string `json:"model"`
@@ -583,6 +590,7 @@ func pxpipeScopeToggle(raw []byte) ([]byte, error) {
 	out := map[string]any{"scope": next, "persisted": true}
 	if err := pushPxpipeModel(key, req.On); err != nil {
 		out["live_push_failed"] = []string{key}
+		return jsonResp(out, http.StatusBadGateway)
 	}
 	return jsonResp(out, http.StatusOK)
 }
@@ -634,17 +642,14 @@ func fleetRelPath(path string) (kind, rel string) {
 
 // managementDispatch routes resource HTML shells (unauthenticated) and
 // management JSON/writes (key-gated by the host) by exact registered path.
+// All resource surfaces serve the single Fleet shell; deep links are hash tabs.
+func shellPage() ([]byte, error) { return htmlPage(withTheme(hubPageHTML)) }
+
 func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, error) {
 	kind, rel := fleetRelPath(req.Path)
 	switch {
-	case kind == "resource" && rel == "/hub":
-		return htmlPage(withTheme(hubPageHTML))
-	case kind == "resource" && rel == "/savings":
-		return htmlPage(withTheme(savingsPageHTML))
-	case kind == "resource" && rel == "/router":
-		return htmlPage(withTheme(routerPageHTML))
-	case kind == "resource" && rel == "/keys":
-		return htmlPage(withTheme(keysPageHTML))
+	case kind == "resource" && (rel == "/hub" || rel == "/" || rel == "/savings" || rel == "/router" || rel == "/keys"):
+		return shellPage()
 	case kind == "management" && rel == "/fleet/state":
 		return hubStateHandler()
 	case kind == "management" && rel == "/fleet/savings":
@@ -657,6 +662,8 @@ func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, e
 		return pxpipeScopeSet(req.Body)
 	case kind == "management" && rel == "/fleet/pxpipe/compression" && req.Method == http.MethodPost:
 		return pxpipeCompression(req.Body)
+	case kind == "management" && rel == "/fleet/features" && req.Method == http.MethodPost:
+		return setModelFeature(req.Body)
 	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodGet:
 		return keysListHandler(req)
 	case kind == "management" && rel == "/fleet/keys" && req.Method == http.MethodPost:

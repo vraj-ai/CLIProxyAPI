@@ -177,7 +177,11 @@ func runIntercept(t *testing.T, method string, req pluginapi.RequestInterceptReq
 func resetState(cfg pluginConfig) {
 	state.mu.Lock()
 	state.config = cfg
+	state.policies = nil
+	state.policyPath = ""
 	state.injections = 0
+	state.lastEditModel = ""
+	state.pace = paceTracker{}
 	state.mu.Unlock()
 }
 
@@ -255,14 +259,23 @@ func TestSavingsResourceIsHTMLShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(resp.Body)
-	if !strings.Contains(page, "Unlock savings") {
-		t.Fatal("savings shell missing lock copy")
+	if !strings.Contains(page, "Unlock the board") {
+		t.Fatal("fleet shell missing lock copy")
 	}
 	if strings.Contains(page, `"pxpipe"`) && strings.Contains(page, `"saved_pct"`) {
-		t.Fatal("savings resource leaked telemetry JSON")
+		t.Fatal("fleet shell leaked telemetry JSON")
 	}
 	if !strings.Contains(page, "/v0/management/fleet/savings") {
-		t.Fatal("savings shell must fetch key-gated JSON")
+		t.Fatal("fleet shell must fetch key-gated savings JSON")
+	}
+	if !strings.Contains(page, `id="pxrows"`) {
+		t.Fatal("fleet shell missing recent pxpipe rows")
+	}
+	if !strings.Contains(page, "not model compliance") {
+		t.Fatal("fleet shell must state that a body edit is not model compliance")
+	}
+	if !strings.Contains(page, `id="tab-activity"`) || !strings.Contains(page, `id="tab-providers"`) {
+		t.Fatal("fleet shell must carry the unified tabs")
 	}
 }
 
@@ -370,6 +383,25 @@ not-json
 	note, _ := payload["note"].(string)
 	if !strings.Contains(note, "not attributed") || !strings.Contains(note, "not measure token or dollar") {
 		t.Fatalf("note = %q", note)
+	}
+	if !strings.Contains(note, "not model compliance") {
+		t.Fatalf("note must state that a body edit is not model compliance: %q", note)
+	}
+	if edit, ok := payload["last_instruction_edit"].(map[string]any); !ok {
+		t.Fatalf("last_instruction_edit missing: %v", payload)
+	} else if seen, _ := edit["count"].(float64); seen != 2 {
+		_ = seen
+	}
+	recent, ok := payload["recent_pxpipe"].([]any)
+	if !ok {
+		t.Fatalf("recent_pxpipe missing: %v", payload)
+	}
+	if len(recent) == 0 {
+		t.Fatal("recent_pxpipe must carry rows when the log is present")
+	}
+	row, _ := recent[0].(map[string]any)
+	if row["model"] != "test" {
+		t.Fatalf("recent row = %v", row)
 	}
 
 	resetState(pluginConfig{
