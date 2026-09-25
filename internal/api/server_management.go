@@ -317,5 +317,15 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		}
 	}
 
-	c.File(filePath)
+	c.Data(http.StatusOK, "text/html; charset=utf-8", injectConsoleInk(mustReadFile(c, filePath)))
+}
+
+func mustReadFile(c *gin.Context, filePath string) []byte {
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		log.WithError(err).Error("failed to read management control panel asset")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return nil
+	}
+	return raw
 }

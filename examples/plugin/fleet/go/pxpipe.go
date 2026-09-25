@@ -51,7 +51,7 @@ type pxpipeTransformResponse struct {
 // pxpipeTransform posts the body to the shim when enabled and returns the
 // transformed body. Any failure returns the original body unchanged.
 func pxpipeTransform(cfg pluginConfig, sourceFormat, model string, body []byte) []byte {
-	if !cfg.PxpipeEnabled || len(body) == 0 {
+	if !modelFeatureEnabled(cfg, model, featurePxpipe) || len(body) == 0 {
 		return body
 	}
 	format := pxpipeFormat(sourceFormat)
