@@ -86,6 +86,8 @@ h2 span { font-family: var(--sans); font-size: 12px; font-weight: 500; color: va
 @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
 .quotacards { display: grid; gap: 10px; }
 .qcard { background: var(--well); border: 1px solid var(--line); border-radius: 11px; padding: 12px; }
+.qhead { display: flex; align-items: baseline; gap: 8px; font-weight: 600; }
+.qhead .empty { font-weight: 400; }
 .pace .cand:first-child { border-top: none; }
 .panel {
   background: var(--panel);

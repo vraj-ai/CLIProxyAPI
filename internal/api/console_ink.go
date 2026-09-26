@@ -20,6 +20,16 @@ html,body{background:var(--fleet-bg)!important;color:var(--fleet-ink);}
 </style>
 <script id="fleet-console-rail">
 (function(){
+  // ponytail: suppresses only the injected rail when Console runs embedded
+  // (already inside Fleet); upgrade to a signed postMessage handshake if
+  // Fleet ever embeds Console with a JS bridge.
+  function embedded(){
+    try {
+      if (window.top !== window.self) return true;
+    } catch (e) { return true; }
+    return /(?:^|[?&])fleet-embed=1(?:&|$)/.test(location.search || "");
+  }
+  if (embedded()) return;
   var links=[["Hub","/v0/resource/plugins/fleet/hub"],["Keys","/v0/resource/plugins/fleet/keys"],["Savings","/v0/resource/plugins/fleet/savings"]];
   var rail=document.createElement("nav");rail.id="fleet-rail";rail.setAttribute("aria-label","Fleet");
   links.forEach(function(pair){

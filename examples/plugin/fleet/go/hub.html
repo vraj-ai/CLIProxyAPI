@@ -195,16 +195,18 @@ function renderQuota(s) {
   const el = document.getElementById("quotacards");
   if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
   el.innerHTML = s.quota.map(p => {
+    const stale = p.stale ? ' <span class="badge">stale</span>' : '';
     const res = (p.resources || []).map(r => {
-      const used = r.used_frac || 0, elapsed = r.paced_frac || 0;
+      // ponytail: the API sends elapsed_frac; a missing marker stays missing, never zero-filled.
+      const used = r.used_frac || 0, elapsed = r.elapsed_frac;
+      const tick = (typeof elapsed === "number") ? '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div>' : '';
       return '<div class="res"><div class="lbl"><span>' + esc(r.name) + '</span><span>' +
         fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
         ' <span class="badge ' + (r.paced ? "bad" : "ok") + '">' + (r.paced ? "behind pace" : "on pace") + '</span></span></div>' +
-        '<div class="bar' + (r.paced ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
-        '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
+        '<div class="bar' + (r.paced ? " behind" : "") + '" role="meter" aria-label="' + esc(r.name) + ' used versus elapsed"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
+        tick + '</div></div>';
     }).join("");
-    return '<div class="qcard"><div class="mono" style="font-weight:600">' + esc(p.name) +
-      ' <span class="empty">' + esc(p.plan || "") + (p.stale ? " · stale" : "") + '</span></div>' + (res || '<div class="empty">no resources</div>') + '</div>';
+    return '<div class="qcard"><div class="qhead"><span class="mono">' + esc(p.name) + '</span><span class="empty">' + esc(p.plan || "no plan") + '</span>' + stale + '</div>' + (res || '<div class="empty">no resources</div>') + '</div>';
   }).join("");
 }
 function renderPace(s) {
