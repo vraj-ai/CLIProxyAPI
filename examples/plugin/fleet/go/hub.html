@@ -116,7 +116,8 @@ function renderQuota(s) {
   if (!s.quota || !s.quota.length) { el.innerHTML = '<div class="empty">openusage unavailable — install or check PATH.</div>'; return; }
   el.innerHTML = s.quota.map(p => {
     const res = (p.resources || []).map(r => {
-      const used = r.used_frac || 0, elapsed = r.paced_frac || 0;
+      const used = r.used_frac || 0, elapsed = r.elapsed_frac;
+      const tick = (typeof elapsed === "number") ? tick : '';
       return '<div class="res"><div class="lbl"><span>' + esc(r.name) + '</span><span>' +
         fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
         ' <span class="badge ' + (r.paced ? "bad" : "ok") + '">' + (r.paced ? "behind pace" : "on pace") + '</span></span></div>' +

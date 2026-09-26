@@ -53,6 +53,16 @@ body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
 </style>
 <script id="fleet-console-rail">
 (function(){
+  // ponytail: suppresses only the injected rail when Console runs embedded
+  // (already inside Fleet); upgrade to a signed postMessage handshake if
+  // Fleet ever embeds Console with a JS bridge.
+  function embedded(){
+    try {
+      if (window.top !== window.self) return true;
+    } catch (e) { return true; }
+    return /(?:^|[?&])fleet-embed=1(?:&|$)/.test(location.search || "");
+  }
+  if (embedded()) return;
   var tabs=[["Overview","/v0/resource/plugins/fleet/hub#/overview","1"],["Providers","/v0/resource/plugins/fleet/hub#/providers","2"],["Models","/v0/resource/plugins/fleet/hub#/models","3"],["Keys","/v0/resource/plugins/fleet/hub#/keys","4"],["Activity","/v0/resource/plugins/fleet/hub#/activity","5"],["Console","/v0/resource/plugins/fleet/hub#/console","6"]];
   var rail=document.getElementById("fleet-rail");
   if(!rail){
