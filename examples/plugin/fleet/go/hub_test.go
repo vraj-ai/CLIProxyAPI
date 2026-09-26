@@ -40,6 +40,18 @@ func TestManagementDispatchHubPage(t *testing.T) {
 	}
 }
 
+func TestShellQuotaReadsElapsedFrac(t *testing.T) {
+	// The state endpoint serializes the elapsed marker as elapsed_frac; the
+	// shell must read that field or the marker silently renders at zero.
+	page := withTheme(hubPageHTML)
+	if !strings.Contains(page, "r.elapsed_frac") {
+		t.Fatal("fleet shell quota renderer does not read elapsed_frac")
+	}
+	if strings.Contains(page, "r.paced_frac") {
+		t.Fatal("fleet shell quota renderer still reads the stale paced_frac field")
+	}
+}
+
 func TestManagementDispatchRejectsSuffixMatch(t *testing.T) {
 	out, err := managementDispatch(&pluginapi.ManagementRequest{
 		Method: http.MethodGet,

@@ -48,3 +48,22 @@ func TestInjectConsoleInkKeepsBodyWithoutClose(t *testing.T) {
 		t.Fatal("rail missing on open-ended body")
 	}
 }
+
+func TestInjectConsoleInkSkipsRailWhenEmbedded(t *testing.T) {
+	fixture := []byte(`<!doctype html><html><head><title>Console</title></head><body><main id="app">EMBED_MARKER</main></body></html>`)
+	out := injectConsoleInk(fixture)
+	// The rail must stay out of the way when Console is already inside Fleet:
+	// an iframe embed or an explicit fleet-embed=1 query flag skips mounting.
+	for _, want := range []string{
+		`window.top !== window.self`,
+		`fleet-embed=1`,
+		`if (embedded()) return;`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("embedded guard missing %s", want)
+		}
+	}
+	if !bytes.Contains(out, []byte("EMBED_MARKER")) {
+		t.Fatal("guard must not drop the original body")
+	}
+}

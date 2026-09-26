@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -12,7 +13,7 @@ import (
 
 func TestWrapUnavailablePreservesUpstream5xx(t *testing.T) {
 	upstream := &Error{HTTPStatus: http.StatusInternalServerError, Message: "Internal server error"}
-	got := wrapUnavailable(upstream)
+	got := wrapUnavailable(time.Time{}, time.Now(), upstream)
 	if got != upstream {
 		t.Fatalf("wrapUnavailable(500) = %v, want the upstream error", got)
 	}
@@ -23,7 +24,7 @@ func TestWrapUnavailablePreservesUpstream5xx(t *testing.T) {
 		t.Fatalf("500 wrapped as missing auth: %v", got)
 	}
 
-	missing := wrapUnavailable(nil)
+	missing := wrapUnavailable(time.Time{}, time.Now(), nil)
 	if !strings.Contains(missing.Error(), "no auth available") {
 		t.Fatalf("nil last error = %v, want auth_unavailable", missing)
 	}
