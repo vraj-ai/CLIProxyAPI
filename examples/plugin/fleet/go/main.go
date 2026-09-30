@@ -194,15 +194,17 @@ func instructionText(cfg pluginConfig) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func instructionTextForModel(cfg pluginConfig, model string) string {
+// instructionsForModel resolves the policy once and returns the text together
+// with which instructions it holds, so reported flags match the inserted body.
+func instructionsForModel(cfg pluginConfig, model string) (text string, caveman, ponytail bool) {
 	parts := make([]string, 0, 2)
-	if modelFeatureEnabled(cfg, model, featureCaveman) {
+	if caveman = modelFeatureEnabled(cfg, model, featureCaveman); caveman {
 		parts = append(parts, cavemanText)
 	}
-	if modelFeatureEnabled(cfg, model, featurePonytail) {
+	if ponytail = modelFeatureEnabled(cfg, model, featurePonytail); ponytail {
 		parts = append(parts, ponytailText)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), caveman, ponytail
 }
 
 func modelAllowed(model string, prefixes []string) bool {
@@ -458,11 +460,10 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
-		if injected, ok := inject(instructionTextForModel(cfg, req.Model), req.SourceFormat, body); ok {
+		// Resolved before locking: modelFeatureEnabled takes state.mu.
+		text, caveman, ponytail := instructionsForModel(cfg, req.Model)
+		if injected, ok := inject(text, req.SourceFormat, body); ok {
 			body = injected
-			// modelFeatureEnabled takes state.mu, so resolve before locking.
-			caveman := modelFeatureEnabled(cfg, req.Model, featureCaveman)
-			ponytail := modelFeatureEnabled(cfg, req.Model, featurePonytail)
 			state.mu.Lock()
 			state.injections++
 			state.lastEditModel = req.Model
