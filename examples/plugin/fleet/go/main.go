@@ -121,6 +121,7 @@ var state = struct {
 	decisions     []routeDecision
 	pace          paceTracker
 	lastEditModel string
+	lastEditCaveman, lastEditPonytail bool
 	sentinels     []string
 	quotaCache    struct {
 		at       time.Time
@@ -459,9 +460,13 @@ func intercept(raw []byte) ([]byte, error) {
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
 		if injected, ok := inject(instructionTextForModel(cfg, req.Model), req.SourceFormat, body); ok {
 			body = injected
+			// modelFeatureEnabled takes state.mu, so resolve before locking.
+			caveman := modelFeatureEnabled(cfg, req.Model, featureCaveman)
+			ponytail := modelFeatureEnabled(cfg, req.Model, featurePonytail)
 			state.mu.Lock()
 			state.injections++
 			state.lastEditModel = req.Model
+			state.lastEditCaveman, state.lastEditPonytail = caveman, ponytail
 			state.mu.Unlock()
 		}
 	}
@@ -525,11 +530,11 @@ type ugEvent struct {
 }
 
 // lastInstructionEdit reports the process injection count and the model whose
-// body was edited most recently. A body edit is not model compliance.
+// body was edited most recently, with which instructions that edit included. A body edit is not model compliance.
 func lastInstructionEdit() map[string]any {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return map[string]any{"count": state.injections, "model": state.lastEditModel}
+	return map[string]any{"count": state.injections, "model": state.lastEditModel, "caveman": state.lastEditCaveman, "ponytail": state.lastEditPonytail}
 }
 
 // recentPxpipeRows returns the tail of the pxpipe event log as proof rows.
