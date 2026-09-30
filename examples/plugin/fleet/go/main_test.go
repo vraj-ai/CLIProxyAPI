@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -181,6 +182,7 @@ func resetState(cfg pluginConfig) {
 	state.policyPath = ""
 	state.injections = 0
 	state.lastEditModel = ""
+	state.lastEditCaveman, state.lastEditPonytail = false, false
 	state.pace = paceTracker{}
 	state.mu.Unlock()
 }
@@ -212,6 +214,44 @@ func TestInterceptBeforeAfter(t *testing.T) {
 	state.mu.Unlock()
 	if inj != 1 {
 		t.Fatalf("injections = %d, want 1", inj)
+	}
+}
+
+func TestLastInstructionEditRecordsWhichInstructionsWereIncluded(t *testing.T) {
+	resetState(pluginConfig{Caveman: true, Ponytail: false})
+	runIntercept(t, pluginabi.MethodRequestInterceptBefore, pluginapi.RequestInterceptRequest{
+		SourceFormat: "openai",
+		Model:        "gpt-x",
+		Body:         []byte(`{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	got := lastInstructionEdit()
+	if got["model"] != "gpt-x" || got["caveman"] != true || got["ponytail"] != false {
+		t.Fatalf("last edit = %v, want gpt-x with caveman only", got)
+	}
+}
+
+func TestSavingsShellLinksPxpipeDashboardWithoutEmbedding(t *testing.T) {
+	out, err := managementDispatch(&pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/fleet/savings",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+		t.Fatalf("envelope %s", out)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	page := string(resp.Body)
+	if !strings.Contains(page, `href="http://127.0.0.1:47821"`) {
+		t.Fatal("savings must link the pxpipe dashboard")
+	}
+	if regexp.MustCompile(`<iframe[^>]*47821`).MatchString(page) {
+		t.Fatal("pxpipe dashboard must be a link, not embedded")
 	}
 }
 

@@ -111,18 +111,19 @@ type pluginConfig struct {
 }
 
 var state = struct {
-	mu            sync.Mutex
-	config        pluginConfig
-	policies      map[string]modelFeaturePolicy
-	policyPath    string
-	injections    int64
-	backend       leadBackend
-	quota         quotaSource
-	decisions     []routeDecision
-	pace          paceTracker
-	lastEditModel string
-	sentinels     []string
-	quotaCache    struct {
+	mu                                sync.Mutex
+	config                            pluginConfig
+	policies                          map[string]modelFeaturePolicy
+	policyPath                        string
+	injections                        int64
+	backend                           leadBackend
+	quota                             quotaSource
+	decisions                         []routeDecision
+	pace                              paceTracker
+	lastEditModel                     string
+	lastEditCaveman, lastEditPonytail bool
+	sentinels                         []string
+	quotaCache                        struct {
 		at       time.Time
 		snap     map[string]providerQuota
 		err      error
@@ -193,15 +194,17 @@ func instructionText(cfg pluginConfig) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func instructionTextForModel(cfg pluginConfig, model string) string {
+// instructionsForModel resolves the policy once and returns the text together
+// with which instructions it holds, so reported flags match the inserted body.
+func instructionsForModel(cfg pluginConfig, model string) (text string, caveman, ponytail bool) {
 	parts := make([]string, 0, 2)
-	if modelFeatureEnabled(cfg, model, featureCaveman) {
+	if caveman = modelFeatureEnabled(cfg, model, featureCaveman); caveman {
 		parts = append(parts, cavemanText)
 	}
-	if modelFeatureEnabled(cfg, model, featurePonytail) {
+	if ponytail = modelFeatureEnabled(cfg, model, featurePonytail); ponytail {
 		parts = append(parts, ponytailText)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), caveman, ponytail
 }
 
 func modelAllowed(model string, prefixes []string) bool {
@@ -457,11 +460,14 @@ func intercept(raw []byte) ([]byte, error) {
 	state.mu.Unlock()
 	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
 	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
-		if injected, ok := inject(instructionTextForModel(cfg, req.Model), req.SourceFormat, body); ok {
+		// Resolved before locking: modelFeatureEnabled takes state.mu.
+		text, caveman, ponytail := instructionsForModel(cfg, req.Model)
+		if injected, ok := inject(text, req.SourceFormat, body); ok {
 			body = injected
 			state.mu.Lock()
 			state.injections++
 			state.lastEditModel = req.Model
+			state.lastEditCaveman, state.lastEditPonytail = caveman, ponytail
 			state.mu.Unlock()
 		}
 	}
@@ -525,11 +531,11 @@ type ugEvent struct {
 }
 
 // lastInstructionEdit reports the process injection count and the model whose
-// body was edited most recently. A body edit is not model compliance.
+// body was edited most recently, with which instructions that edit included. A body edit is not model compliance.
 func lastInstructionEdit() map[string]any {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return map[string]any{"count": state.injections, "model": state.lastEditModel}
+	return map[string]any{"count": state.injections, "model": state.lastEditModel, "caveman": state.lastEditCaveman, "ponytail": state.lastEditPonytail}
 }
 
 // recentPxpipeRows returns the tail of the pxpipe event log as proof rows.
