@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -49,6 +50,79 @@ func TestShellQuotaReadsElapsedFrac(t *testing.T) {
 	}
 	if strings.Contains(page, "r.paced_frac") {
 		t.Fatal("fleet shell quota renderer still reads the stale paced_frac field")
+	}
+}
+
+func TestShellQuotaTickRequiresFiniteElapsed(t *testing.T) {
+	out, err := shellPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatal(err)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	page := string(resp.Body)
+	if strings.Contains(page, "? tick :") {
+		t.Fatal("served quota shell references the tick before initialization")
+	}
+	if !strings.Contains(page, "Number.isFinite(elapsed)") || !strings.Contains(page, "tick + '</div></div>'") {
+		t.Fatal("served quota shell must include a tick only for finite elapsed markers")
+	}
+}
+
+func TestHubQuotaOmitsUnknownElapsed(t *testing.T) {
+	freezeNow(t)
+	state.mu.Lock()
+	oldQuota, oldCache := state.quota, state.quotaCache
+	state.quota = fakeQuota{snap: map[string]providerQuota{
+		"test": {Resources: map[string]quotaResource{
+			"unknown": {Kind: "consumption", Remaining: 75, Limit: 100},
+			"known":   {Kind: "consumption", Remaining: 75, Limit: 100, WindowSeconds: 100, ResetsAt: testNow.Add(50 * time.Second)},
+			"start":   {Kind: "consumption", Remaining: 100, Limit: 100, WindowSeconds: 100, ResetsAt: testNow.Add(100 * time.Second)},
+		}},
+	}}
+	state.quotaCache.at = time.Time{}
+	state.quotaCache.fetching = false
+	state.mu.Unlock()
+	t.Cleanup(func() {
+		state.mu.Lock()
+		state.quota, state.quotaCache = oldQuota, oldCache
+		state.mu.Unlock()
+	})
+
+	providers := buildQuota()
+	if len(providers) != 1 || len(providers[0].Resources) != 3 {
+		t.Fatalf("quota shape = %+v", providers)
+	}
+	seen := make(map[string]bool)
+	for _, resource := range providers[0].Resources {
+		seen[resource.Name] = true
+		encoded, err := json.Marshal(resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch resource.Name {
+		case "unknown":
+			if strings.Contains(string(encoded), `"elapsed_frac"`) {
+				t.Fatal("missing elapsed marker must be absent from quota JSON")
+			}
+		case "known":
+			if !strings.Contains(string(encoded), `"elapsed_frac":0.5`) {
+				t.Fatal("known elapsed marker must retain its computed value")
+			}
+		case "start":
+			if !strings.Contains(string(encoded), `"elapsed_frac":0`) {
+				t.Fatal("known zero elapsed must be present, not treated as missing")
+			}
+		}
+	}
+	if !seen["unknown"] || !seen["known"] || !seen["start"] {
+		t.Fatalf("quota resource names = %+v", seen)
 	}
 }
 

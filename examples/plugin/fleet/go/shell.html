@@ -285,11 +285,11 @@ function renderQuota(s) {
   el.innerHTML = s.quota.map(p => {
     const res = (p.resources || []).map(r => {
       const used = r.used_frac || 0, elapsed = r.elapsed_frac;
-      const tick = (typeof elapsed === "number") ? tick : '';
+      const tick = Number.isFinite(elapsed) ? '<div class="tick" style="left:' + Math.min(99, Math.max(0, elapsed * 100)) + '%"></div>' : '';
       return '<div class="res"><div class="lbl"><span>' + esc(r.name) + '</span><span>' + fmt(r.remaining) + "/" + fmt(r.limit) + ' · resets ' + (r.resets_at ? until(r.resets_at) : "—") +
         ' <span class="badge ' + (r.paced ? "bad" : "ok") + '">' + (r.paced ? "behind pace" : "on pace") + '</span></span></div>' +
         '<div class="bar' + (r.paced ? " behind" : "") + '"><div class="fill" style="width:' + Math.min(100, used * 100) + '%"></div>' +
-        '<div class="tick" style="left:' + Math.min(99, elapsed * 100) + '%"></div></div></div>';
+        tick + '</div></div>';
     }).join("");
     const stale = p.stale ? ' <span class="badge">stale</span>' : '';
     return '<div class="qcard"><div class="qhead"><span class="mono">' + esc(p.name) + '</span><span class="empty">' + esc(p.plan || "no plan") + '</span>' + stale + '</div>' + (res || '<div class="empty">no resources</div>') + '</div>';
