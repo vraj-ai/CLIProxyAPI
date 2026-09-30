@@ -43,14 +43,14 @@ type hubProvider struct {
 }
 
 type hubQuotaResource struct {
-	Name      string  `json:"name"`
-	Kind      string  `json:"kind"`
-	Remaining float64 `json:"remaining"`
-	Limit     float64 `json:"limit"`
-	UsedFrac  float64 `json:"used_frac"`
-	PacedFrac float64 `json:"elapsed_frac"`
-	Paced     bool    `json:"paced"`
-	ResetsAt  string  `json:"resets_at,omitempty"`
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`
+	Remaining float64  `json:"remaining"`
+	Limit     float64  `json:"limit"`
+	UsedFrac  float64  `json:"used_frac"`
+	PacedFrac *float64 `json:"elapsed_frac,omitempty"`
+	Paced     bool     `json:"paced"`
+	ResetsAt  string   `json:"resets_at,omitempty"`
 }
 
 type hubQuotaProvider struct {
@@ -328,9 +328,10 @@ func buildQuota() []hubQuotaProvider {
 				if lf > 1 {
 					lf = 1
 				}
-				qr.PacedFrac = 1 - lf
+				elapsed := 1 - lf
+				qr.PacedFrac = &elapsed
 				qr.ResetsAt = r.ResetsAt.UTC().Format(time.RFC3339)
-				qr.Paced = qr.PacedFrac >= 0.05 && qr.UsedFrac/qr.PacedFrac > 1
+				qr.Paced = elapsed >= 0.05 && qr.UsedFrac/elapsed > 1
 			}
 			qp.Resources = append(qp.Resources, qr)
 		}
