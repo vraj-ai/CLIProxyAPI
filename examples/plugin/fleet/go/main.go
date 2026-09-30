@@ -111,19 +111,19 @@ type pluginConfig struct {
 }
 
 var state = struct {
-	mu            sync.Mutex
-	config        pluginConfig
-	policies      map[string]modelFeaturePolicy
-	policyPath    string
-	injections    int64
-	backend       leadBackend
-	quota         quotaSource
-	decisions     []routeDecision
-	pace          paceTracker
-	lastEditModel string
+	mu                                sync.Mutex
+	config                            pluginConfig
+	policies                          map[string]modelFeaturePolicy
+	policyPath                        string
+	injections                        int64
+	backend                           leadBackend
+	quota                             quotaSource
+	decisions                         []routeDecision
+	pace                              paceTracker
+	lastEditModel                     string
 	lastEditCaveman, lastEditPonytail bool
-	sentinels     []string
-	quotaCache    struct {
+	sentinels                         []string
+	quotaCache                        struct {
 		at       time.Time
 		snap     map[string]providerQuota
 		err      error
