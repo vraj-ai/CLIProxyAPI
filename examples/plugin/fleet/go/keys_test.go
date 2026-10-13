@@ -114,7 +114,7 @@ func TestFilterModelListLeavesEmbeddings(t *testing.T) {
 }
 
 func TestModelsFilter(t *testing.T) {
-	body := []byte(`{"object":"list","data":[{"id":"openai/gpt-6-astra","object":"model","created":1},{"id":"xai/grok-4.6","object":"model"}]}`)
+	body := []byte(`{"object":"list","data":[{"id":"openai/gpt-6-astra","object":"model","created":1},{"id":"xai/grok-4.6","object":"model"},{"id":"cpa router","object":"model"}]}`)
 	g := &fleetKeyGrant{Mode: grantModeList, Models: []string{"openai/"}}
 	out := filterModelList(body, func(id string) bool { return catalogAllows(g, id) })
 	var doc map[string]any
@@ -130,6 +130,17 @@ func TestModelsFilter(t *testing.T) {
 	}
 	if doc["object"] != "list" {
 		t.Fatal("envelope dropped")
+	}
+}
+
+func TestLegacySyntheticModelNeverAppearsOrPassesGrant(t *testing.T) {
+	modelList := []byte(`{"object":"list","data":[{"id":"cpa router","object":"model"},{"id":"openai/gpt-6-astra","object":"model"}]}`)
+	filtered := filterModelList(modelList, func(string) bool { return true })
+	if strings.Contains(string(filtered), "cpa router") || !strings.Contains(string(filtered), "openai/gpt-6-astra") {
+		t.Fatalf("legacy synthetic model filtering = %s", filtered)
+	}
+	if grantAllowsRequest("", "cpa router", "") || grantAllowsRequest("", "", "cpa router") {
+		t.Fatal("legacy synthetic model passed request grant checks")
 	}
 }
 
@@ -344,36 +355,5 @@ func TestFleetKeyCreateRollsBackGrantOnProxyFailure(t *testing.T) {
 	}
 	if len(store.Grants) != 0 {
 		t.Fatalf("orphan grant: %+v", store.Grants)
-	}
-}
-
-func TestKeysPageIsHTMLShell(t *testing.T) {
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/keys",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env envelope
-	if json.Unmarshal(out, &env) != nil || !env.OK {
-		t.Fatalf("envelope %s", out)
-	}
-	var resp pluginapi.ManagementResponse
-	if json.Unmarshal(env.Result, &resp) != nil {
-		t.Fatal("result")
-	}
-	page := string(resp.Body)
-	if !strings.Contains(page, "Mint a key") {
-		t.Fatal("keys shell missing mint copy")
-	}
-	if strings.Contains(page, `"key_hash"`) {
-		t.Fatal("keys shell leaked grant store")
-	}
-	if !strings.Contains(page, "/v0/management") || !strings.Contains(page, "/fleet/keys") {
-		t.Fatal("keys shell must fetch key-gated JSON")
-	}
-	if !strings.Contains(page, `data-tab="keys"`) || !strings.Contains(page, `data-tab="overview"`) {
-		t.Fatal("fleet shell nav missing unified tabs")
 	}
 }

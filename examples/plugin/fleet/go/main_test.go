@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -16,6 +15,73 @@ import (
 )
 
 const testText = "fleet test"
+
+func callMethod(t *testing.T, method string, request any) envelope {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := handleMethod(method, raw)
+	if err != nil {
+		t.Fatalf("handleMethod(%s) error: %v", method, err)
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("response is not an envelope: %v", err)
+	}
+	return env
+}
+
+func TestRegistrationNeverExposesCPARouterFromLegacyConfig(t *testing.T) {
+	config, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("router_enabled: true\nrouter_agent: pi\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configure(config); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resetState(pluginConfig{}) })
+
+	reg := callMethod(t, pluginabi.MethodPluginRegister, map[string]any{})
+	var registration pluginRegistration
+	if err := json.Unmarshal(reg.Result, &registration); err != nil {
+		t.Fatalf("registration payload: %v", err)
+	}
+	if registration.Capabilities.ModelRegistrar || registration.Capabilities.Executor || registration.Capabilities.AuthProvider {
+		t.Fatalf("router capabilities remain registered: %+v", registration.Capabilities)
+	}
+	for _, field := range registration.Metadata.ConfigFields {
+		if strings.Contains(strings.ToLower(field.Name), "router") {
+			t.Fatalf("registration exposes legacy router config: %+v", field)
+		}
+	}
+	if strings.Contains(string(reg.Result), "Fleet Router") {
+		t.Fatalf("registration exposes a router menu: %s", reg.Result)
+	}
+
+	models := callMethod(t, pluginabi.MethodModelRegister, map[string]any{})
+	if models.OK || models.Error.Code != "unknown_method" {
+		t.Fatalf("legacy router config exposed a model registrar: %+v", models)
+	}
+	out, err := handleMethod(pluginabi.MethodExecutorIdentifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unknown envelope
+	if err := json.Unmarshal(out, &unknown); err != nil || unknown.OK || unknown.Error.Code != "unknown_method" {
+		t.Fatalf("executor identifier remains registered: %s", out)
+	}
+}
+
+func TestLegacyFleetProviderAndModelAreFiltered(t *testing.T) {
+	if providers := buildProviders(hubConfig{}, []authFileView{{File: "fleet-router.json", Provider: "fleet-router"}}); len(providers) != 0 {
+		t.Fatalf("legacy synthetic auth reappeared as a provider: %+v", providers)
+	}
+	if !isLegacyFleetProvider("other.json", " FLEET-ROUTER ") || !isLegacyFleetModel(" CPA ROUTER ") {
+		t.Fatal("legacy synthetic records were not recognized")
+	}
+}
 
 func TestInject(t *testing.T) {
 	claudeWithSystem := `{"model":"claude-x","system":"be brief","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"bash"}]}`
@@ -230,31 +296,6 @@ func TestLastInstructionEditRecordsWhichInstructionsWereIncluded(t *testing.T) {
 	}
 }
 
-func TestSavingsShellLinksPxpipeDashboardWithoutEmbedding(t *testing.T) {
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/savings",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
-		t.Fatalf("envelope %s", out)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatal(err)
-	}
-	page := string(resp.Body)
-	if !strings.Contains(page, `href="http://127.0.0.1:47821"`) {
-		t.Fatal("savings must link the pxpipe dashboard")
-	}
-	if regexp.MustCompile(`<iframe[^>]*47821`).MatchString(page) {
-		t.Fatal("pxpipe dashboard must be a link, not embedded")
-	}
-}
-
 func TestInterceptFlagsOff(t *testing.T) {
 	resetState(pluginConfig{Caveman: false, Ponytail: false})
 	body := []byte(`{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}`)
@@ -279,63 +320,6 @@ func TestInterceptPrefixExcluded(t *testing.T) {
 	})
 	if !bytes.Equal(resp.Body, body) {
 		t.Fatalf("body changed for excluded model: %s", resp.Body)
-	}
-}
-
-func TestSavingsResourceIsHTMLShell(t *testing.T) {
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/savings",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
-		t.Fatalf("envelope %s", out)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatal(err)
-	}
-	page := string(resp.Body)
-	if !strings.Contains(page, "Unlock the board") {
-		t.Fatal("fleet shell missing lock copy")
-	}
-	if strings.Contains(page, `"pxpipe"`) && strings.Contains(page, `"saved_pct"`) {
-		t.Fatal("fleet shell leaked telemetry JSON")
-	}
-	if !strings.Contains(page, "/v0/management/fleet/savings") {
-		t.Fatal("fleet shell must fetch key-gated savings JSON")
-	}
-	if !strings.Contains(page, `id="pxrows"`) {
-		t.Fatal("fleet shell missing recent pxpipe rows")
-	}
-	if !strings.Contains(page, "not model compliance") {
-		t.Fatal("fleet shell must state that a body edit is not model compliance")
-	}
-	if !strings.Contains(page, `id="tab-activity"`) || !strings.Contains(page, `id="tab-providers"`) {
-		t.Fatal("fleet shell must carry the unified tabs")
-	}
-}
-
-// The proxy bans an IP after 5 failed management attempts, so the shell
-// must never fire requests without a key: no poll on lock screen, one
-// probe gating the fan-out, and the poller stopped on key rejection.
-func TestShellNeverPollsWithoutKey(t *testing.T) {
-	page := withTheme(hubPageHTML)
-	for _, want := range []string{
-		"if (!keyEl.value) { showLock",
-		"stopPoll()",
-		"startPoll()",
-		"if (keyEl.value) refresh(true); else showLock",
-	} {
-		if !strings.Contains(page, want) {
-			t.Fatalf("fleet shell missing poll guard %q", want)
-		}
-	}
-	if strings.Contains(page, "setInterval(() => refresh(false), 15000)") {
-		t.Fatal("fleet shell must not run an unconditional poller")
 	}
 }
 

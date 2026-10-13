@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,62 +10,6 @@ import (
 	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
-
-func encodeConsoleStored(secret, host, userAgent string) string {
-	plain, _ := json.Marshal(secret)
-	key := consoleKeyMaterial(host, userAgent)
-	buf := make([]byte, len(plain))
-	for i := range plain {
-		buf[i] = plain[i] ^ key[i%len(key)]
-	}
-	return consoleKeyPrefix + base64.StdEncoding.EncodeToString(buf)
-}
-
-func TestFleetConsoleKey(t *testing.T) {
-	secret := "mgmt-secret-fixture-" + strings.Repeat("x", 80)
-	stored := encodeConsoleStored(secret, "127.0.0.1:8317", "test-agent")
-	got := decodeConsoleStored(stored, "127.0.0.1:8317", "test-agent")
-	if got != secret {
-		t.Fatalf("decoded = %q", got)
-	}
-	if decodeConsoleStored(stored, "127.0.0.1:8317", "other-agent") == secret {
-		t.Fatal("decode must depend on the browser material")
-	}
-	if decodeConsoleStored("mgmt-secret-fixture", "h", "u") != "mgmt-secret-fixture" {
-		t.Fatal("plaintext passthrough expected")
-	}
-	if decodeConsoleStored(consoleKeyPrefix+"!!!", "h", "u") != "" {
-		t.Fatal("undecodable prefixed shape must yield empty")
-	}
-	if decodeConsoleStored("", "h", "u") != "" {
-		t.Fatal("empty input must yield empty")
-	}
-
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/hub",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
-		t.Fatalf("envelope: %v %s", err, out)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatal(err)
-	}
-	body := string(resp.Body)
-	for _, want := range []string{"consoleStoredKey", consoleKeyPrefix, consoleKeySeed} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("hub shell missing keyring piece %s", want)
-		}
-	}
-	if strings.Contains(body, secret) {
-		t.Fatal("hub shell must not carry key material")
-	}
-}
 
 func TestUsagePace(t *testing.T) {
 	resetState(pluginConfig{})

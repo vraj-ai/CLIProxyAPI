@@ -4,8 +4,8 @@ package main
 // write relays that need a server-side hop (pxpipe's dashboard API is not
 // CORS-enabled, so the plugin relays through host.http.do).
 //
-// State the plugin owns directly: router decisions/readiness, plugin flags,
-// pxpipe scope (config.json + live), quota (openusage), provider inventory
+// State the plugin owns directly: plugin flags, pxpipe scope (config.json + live),
+// quota (openusage), provider inventory
 // (config.yaml + auth files, metadata only). Writes the plugin cannot do
 // itself (provider toggles, its own config) stay on the key-gated core
 // management API — the page calls those with the user's management key.
@@ -26,9 +26,19 @@ import (
 )
 
 const (
-	pxpipeProxyURL   = "http://127.0.0.1:47821"
-	pxpipeConfigPath = ".config/pxpipe/config.json"
+	pxpipeProxyURL      = "http://127.0.0.1:47821"
+	pxpipeConfigPath    = ".config/pxpipe/config.json"
+	legacyFleetProvider = "fleet-router"
+	legacyFleetModel    = "cpa router"
 )
+
+func isLegacyFleetProvider(filename, provider string) bool {
+	return filename == legacyFleetProvider+".json" || strings.EqualFold(strings.TrimSpace(provider), legacyFleetProvider)
+}
+
+func isLegacyFleetModel(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), legacyFleetModel)
+}
 
 // ---------------------------------------------------------------------------
 // state
@@ -60,21 +70,6 @@ type hubQuotaProvider struct {
 	Resources []hubQuotaResource `json:"resources"`
 }
 
-type hubRouter struct {
-	Enabled    bool            `json:"enabled"`
-	Eligible   string          `json:"eligible,omitempty"`
-	Decisions  []routeDecision `json:"decisions"`
-	Candidates []candidateView `json:"candidates"`
-}
-
-type candidateView struct {
-	Label  string `json:"label"`
-	Model  string `json:"model"`
-	Effort string `json:"effort"`
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"`
-}
-
 // servedModels calls the proxy's own /v1/models through the host bridge —
 // the authoritative "what's served right now" list, already reflecting
 // disabled auths and compat entries.
@@ -100,7 +95,7 @@ func servedModels(cfg hubConfig) []string {
 	}
 	out := make([]string, 0, len(doc.Data))
 	for _, m := range doc.Data {
-		if m.ID != "" {
+		if m.ID != "" && !isLegacyFleetModel(m.ID) {
 			out = append(out, m.ID)
 		}
 	}
@@ -121,7 +116,6 @@ type hubPxpipe struct {
 type hubFlags struct {
 	Caveman  bool `json:"caveman"`
 	Ponytail bool `json:"ponytail"`
-	Router   bool `json:"router"`
 	Pxpipe   bool `json:"pxpipe"`
 }
 
@@ -133,7 +127,6 @@ type hubState struct {
 	Models      []string           `json:"models"`
 	Quota       []hubQuotaProvider `json:"quota"`
 	Pace        paceView           `json:"pace"`
-	Router      hubRouter          `json:"router"`
 	Pxpipe      hubPxpipe          `json:"pxpipe"`
 	Features    hubFeatureState    `json:"features"`
 	Keys        []publicGrant      `json:"keys"`
@@ -189,7 +182,7 @@ func listAuthFiles() []authFileView {
 	}
 	var out []authFileView
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || e.Name() == "fleet-router.json" {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || e.Name() == legacyFleetProvider+".json" {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -197,7 +190,7 @@ func listAuthFiles() []authFileView {
 			continue
 		}
 		var v authFileView
-		if json.Unmarshal(raw, &v) != nil || v.Provider == "" {
+		if json.Unmarshal(raw, &v) != nil || v.Provider == "" || isLegacyFleetProvider(e.Name(), v.Provider) {
 			continue
 		}
 		v.File = e.Name()
@@ -217,7 +210,7 @@ func maskAuthFile(name string) string {
 	return name
 }
 
-func buildProviders(cfg hubConfig, auths []authFileView, routerEnabled bool) []hubProvider {
+func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
 	var out []hubProvider
 	excludedAll := map[string]bool{}
 	for p, pats := range cfg.OAuthExcluded {
@@ -228,6 +221,9 @@ func buildProviders(cfg hubConfig, auths []authFileView, routerEnabled bool) []h
 		}
 	}
 	for _, a := range auths {
+		if isLegacyFleetProvider(a.File, a.Provider) {
+			continue
+		}
 		models := make([]string, 0, len(a.Models))
 		for _, m := range a.Models {
 			if m.ID != "" {
@@ -257,16 +253,11 @@ func buildProviders(cfg hubConfig, auths []authFileView, routerEnabled bool) []h
 			Models: models, Detail: "prefix " + c.Prefix,
 		})
 	}
-	out = append(out, hubProvider{
-		Name: routerProvider, Kind: "plugin", Disabled: !routerEnabled,
-		Models: []string{virtualRouterModel}, Detail: "herdr-orchestrated virtual model",
-	})
 	return out
 }
 
 // quotaCached serves the dashboard: a 15s TTL on the --force fetch keeps a
-// polling page from hammering openusage's live refresh. Routing decisions
-// still fetch fresh per request.
+// polling page from hammering openusage's live refresh.
 func quotaCached() (map[string]providerQuota, error) {
 	now := nowFunc()
 	state.mu.Lock()
@@ -338,34 +329,6 @@ func buildQuota() []hubQuotaProvider {
 		out = append(out, qp)
 	}
 	return out
-}
-
-func buildRouterView(live []herdrAgent) hubRouter {
-	state.mu.Lock()
-	cfg := state.config
-	decisions := append([]routeDecision(nil), state.decisions...)
-	state.mu.Unlock()
-	view := hubRouter{Enabled: cfg.RouterEnabled, Decisions: decisions}
-	if !cfg.RouterEnabled {
-		return view
-	}
-	snap, qerr := quotaCached()
-	for _, c := range preferenceOrder {
-		cv := candidateView{Label: c.Label, Model: c.Model, Effort: c.Effort}
-		var reason string
-		if qerr != nil {
-			reason = "quota_unavailable"
-		} else {
-			_, _, reason = candidateGate(c, live, "", snap, nowFunc(), false)
-		}
-		cv.Reason = reason
-		cv.OK = reason == ""
-		if cv.OK && view.Eligible == "" {
-			view.Eligible = c.Label
-		}
-		view.Candidates = append(view.Candidates, cv)
-	}
-	return view
 }
 
 func pxpipeScope() ([]string, string) {
@@ -464,9 +427,6 @@ func buildHubState() hubState {
 	cfg := loadHubConfig()
 	auths := listAuthFiles()
 	scope, scopeSrc := pxpipeScope()
-	agentCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	live, _ := defaultHerdr().agents(agentCtx)
-	cancel()
 	state.mu.Lock()
 	pluginCfg := state.config
 	pace := buildPaceView()
@@ -478,15 +438,13 @@ func buildHubState() hubState {
 		Flags: hubFlags{
 			Caveman:  pluginCfg.Caveman,
 			Ponytail: pluginCfg.Ponytail,
-			Router:   pluginCfg.RouterEnabled,
 			Pxpipe:   pluginCfg.PxpipeEnabled,
 		},
-		Providers: buildProviders(cfg, auths, pluginCfg.RouterEnabled),
+		Providers: buildProviders(cfg, auths),
 		Models:    models,
 		Features:  buildFeatureState(models),
 		Quota:     buildQuota(),
 		Pace:      pace,
-		Router:    buildRouterView(live),
 		Pxpipe: hubPxpipe{
 			ProxyURL:    pxpipeProxyURL,
 			Reachable:   pxpipeReachable(),
@@ -641,22 +599,19 @@ func fleetRelPath(path string) (kind, rel string) {
 	}
 }
 
-// managementDispatch routes resource HTML shells (unauthenticated) and
+// managementDispatch routes legacy resource links (unauthenticated) and
 // management JSON/writes (key-gated by the host) by exact registered path.
-// All resource surfaces serve the single Fleet shell; deep links are hash tabs.
-func shellPage() ([]byte, error) { return htmlPage(withTheme(hubPageHTML)) }
+func legacyResourcePage(path string) ([]byte, error) { return htmlPage(legacyPage(path)) }
 
 func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, error) {
 	kind, rel := fleetRelPath(req.Path)
 	switch {
 	case kind == "resource" && (rel == "/hub" || rel == "/" || rel == "/savings" || rel == "/router" || rel == "/keys"):
-		return shellPage()
+		return legacyResourcePage(rel)
 	case kind == "management" && rel == "/fleet/state":
 		return hubStateHandler()
 	case kind == "management" && rel == "/fleet/savings":
 		return savingsJSON()
-	case kind == "management" && rel == "/fleet/router":
-		return routerDiagnostics()
 	case kind == "management" && rel == "/fleet/pxpipe/scope/toggle" && req.Method == http.MethodPost:
 		return pxpipeScopeToggle(req.Body)
 	case kind == "management" && rel == "/fleet/pxpipe/scope" && req.Method == http.MethodPost:

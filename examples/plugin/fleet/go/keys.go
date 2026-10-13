@@ -290,6 +290,9 @@ func metadataStrings(meta map[string]any, keys ...string) []string {
 }
 
 func grantAllowsRequest(secret, model, requested string) bool {
+	if isLegacyFleetModel(model) || isLegacyFleetModel(requested) {
+		return false
+	}
 	g, err := grantForSecret(secret)
 	if err != nil {
 		return false
@@ -339,7 +342,7 @@ func filterModelList(body []byte, allow func(string) bool) []byte {
 	for _, item := range data {
 		obj := item.(map[string]any)
 		id, _ := obj["id"].(string)
-		if allow(id) {
+		if !isLegacyFleetModel(id) && allow(id) {
 			kept = append(kept, obj)
 		}
 	}

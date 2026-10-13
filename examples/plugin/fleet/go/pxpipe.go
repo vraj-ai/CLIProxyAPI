@@ -58,7 +58,7 @@ func pxpipeTransform(cfg pluginConfig, sourceFormat, model string, body []byte) 
 	if format == "" {
 		return body
 	}
-	if strings.EqualFold(strings.TrimSpace(model), virtualRouterModel) || bytes.Contains(body, []byte(pxpipeMarker)) {
+	if bytes.Contains(body, []byte(pxpipeMarker)) {
 		return body
 	}
 	url := strings.TrimRight(cfg.PxpipeURL, "/") + "/transform"

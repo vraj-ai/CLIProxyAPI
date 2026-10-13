@@ -1,6 +1,5 @@
 // fleet plugin: injects caveman + ponytail instructions into every routed
-// request, and exposes a /savings management resource aggregating pxpipe and
-// pi-subagents compression telemetry.
+// request, and exposes Fleet management data for the native React console.
 package main
 
 /*
@@ -99,15 +98,10 @@ type pluginConfig struct {
 	ClientTools       clientToolConfig `yaml:"client_tools"`
 	Models            []string         `yaml:"models"` // model prefixes to inject; empty = all
 	ModelPoliciesPath string           `yaml:"model_policies_path"`
-	PxpipeEvents      string           `yaml:"pxpipe_events"`     // events.jsonl path
-	UsageGain         string           `yaml:"usage_gain"`        // pi usage-gain.jsonl path
-	RouterEnabled     bool             `yaml:"router_enabled"`    // expose the "cpa router" virtual model
-	RouterAgent       string           `yaml:"router_agent"`      // herdr agent selector used as lead
-	RouterTimeoutMS   int              `yaml:"router_timeout_ms"` // bound on the lead wait
-	RouterReadLines   int              `yaml:"router_read_lines"` // read-back window for marker extraction
-	RedactSentinels   []string         `yaml:"redact_sentinels"`  // literals that must never appear in diagnostics
-	PxpipeEnabled     bool             `yaml:"pxpipe_enabled"`    // route eligible bodies through the pxpipe transform shim
-	PxpipeURL         string           `yaml:"pxpipe_url"`        // pxpipe-transform shim base URL
+	PxpipeEvents      string           `yaml:"pxpipe_events"`  // events.jsonl path
+	UsageGain         string           `yaml:"usage_gain"`     // pi usage-gain.jsonl path
+	PxpipeEnabled     bool             `yaml:"pxpipe_enabled"` // route eligible bodies through the pxpipe transform shim
+	PxpipeURL         string           `yaml:"pxpipe_url"`     // pxpipe-transform shim base URL
 }
 
 var state = struct {
@@ -116,13 +110,10 @@ var state = struct {
 	policies                          map[string]modelFeaturePolicy
 	policyPath                        string
 	injections                        int64
-	backend                           leadBackend
 	quota                             quotaSource
-	decisions                         []routeDecision
 	pace                              paceTracker
 	lastEditModel                     string
 	lastEditCaveman, lastEditPonytail bool
-	sentinels                         []string
 	quotaCache                        struct {
 		at       time.Time
 		snap     map[string]providerQuota
@@ -171,7 +162,6 @@ func configure(raw []byte) error {
 	state.config = cfg
 	state.policies = policies
 	state.policyPath = policyPath
-	state.sentinels = cfg.RedactSentinels
 	state.mu.Unlock()
 	return nil
 }
@@ -329,31 +319,10 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 		return handleUsage(request)
 	case pluginabi.MethodResponseInterceptAfter:
 		return interceptModelsResponse(request)
-	case pluginabi.MethodModelRegister:
-		return okEnvelope(modelRegistration())
-	case pluginabi.MethodExecutorIdentifier:
-		return okEnvelopeJSON(`{"identifier":"` + routerProvider + `"}`)
-	case pluginabi.MethodExecutorExecute:
-		return executorExecute(request)
-	case pluginabi.MethodExecutorExecuteStream:
-		return executorExecuteStream(request)
-	case pluginabi.MethodExecutorCountTokens:
-		return errorEnvelope("unsupported_capability", "cpa router does not report token counts"), nil
-	case pluginabi.MethodExecutorHTTPRequest:
-		return errorEnvelope("unsupported_capability", "cpa router does not serve raw http requests"), nil
-	case pluginabi.MethodAuthIdentifier:
-		return authIdentifier()
-	case pluginabi.MethodAuthParse:
-		return authParse(request)
-	case pluginabi.MethodAuthRefresh:
-		return authRefresh(request)
-	case pluginabi.MethodAuthLoginStart, pluginabi.MethodAuthLoginPoll:
-		return errorEnvelope("unsupported_capability", "fleet-router auth is file-based; no login flow"), nil
 	case "management.register":
 		return okEnvelopeJSON(`{"routes":[
 			{"Method":"GET","Path":"/fleet/state"},
 			{"Method":"GET","Path":"/fleet/savings"},
-			{"Method":"GET","Path":"/fleet/router"},
 			{"Method":"GET","Path":"/fleet/keys"},
 			{"Method":"POST","Path":"/fleet/keys"},
 			{"Method":"PATCH","Path":"/fleet/keys"},
@@ -364,10 +333,10 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 			{"Method":"POST","Path":"/fleet/pxpipe/compression"},
 			{"Method":"POST","Path":"/fleet/features"}
 		],"resources":[
-			{"Path":"/hub","Menu":"Fleet Hub","Description":"Unified control plane — quota pace, cpa router, providers, models, pxpipe scope, and fleet flags."},
-			{"Path":"/keys","Menu":"Fleet Keys","Description":"Mint OpenRouter-style API keys for the models this proxy currently serves."},
-			{"Path":"/savings","Menu":"Fleet","Description":"pxpipe + subagent compression savings aggregated from local telemetry."},
-			{"Path":"/router","Menu":"Fleet Router","Description":"Redacted cpa router decisions and read-only readiness evidence."}
+			{"Path":"/hub","Menu":"","Description":"Legacy route to the Fleet console."},
+			{"Path":"/keys","Menu":"","Description":"Legacy route to Fleet access."},
+			{"Path":"/savings","Menu":"","Description":"Legacy route to Fleet activity."},
+			{"Path":"/router","Menu":"","Description":"Legacy route to the Fleet console."}
 		]}`)
 	case "management.handle":
 		var req pluginapi.ManagementRequest
@@ -410,10 +379,6 @@ func buildRegistration() pluginRegistration {
 				{Name: "caveman", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject caveman compressed-reply instruction into routed requests."},
 				{Name: "ponytail", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject ponytail lazy-solution instruction into routed requests."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model prefixes to inject; empty means all."},
-				{Name: "router_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Expose the cpa router virtual model through the Herdr-orchestrated executor."},
-				{Name: "router_agent", Type: pluginapi.ConfigFieldTypeString, Description: "Herdr agent selector (agent kind or pane id) used as the lead."},
-				{Name: "router_timeout_ms", Type: pluginapi.ConfigFieldTypeInteger, Description: "Bound on the lead wait in milliseconds."},
-				{Name: "router_read_lines", Type: pluginapi.ConfigFieldTypeInteger, Description: "Terminal read-back window for result marker extraction."},
 				{Name: "pxpipe_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Route in-scope request bodies through the pxpipe transform shim so the cliproxyapi link includes pxpipe."},
 				{Name: "pxpipe_url", Type: pluginapi.ConfigFieldTypeString, Description: "pxpipe-transform shim base URL (default http://127.0.0.1:47822)."},
 				{Name: "client_tools", Type: pluginapi.ConfigFieldTypeObject, Description: "Opt-in client layers. Headroom is a local context proxy and RTK rewrites shell output."},
@@ -426,12 +391,6 @@ func buildRegistration() pluginRegistration {
 			RequestLifecyclePlugin: true,
 			UsagePlugin:            true,
 			ManagementAPI:          true,
-			ModelRegistrar:         true,
-			AuthProvider:           true,
-			Executor:               true,
-			ExecutorModelScope:     string(pluginapi.ExecutorModelScopeStatic),
-			ExecutorInputFormats:   []string{"openai"},
-			ExecutorOutputFormats:  []string{"openai"},
 		},
 	}
 }

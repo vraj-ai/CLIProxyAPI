@@ -2,12 +2,8 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"strings"
 	"testing"
 	"time"
-
-	pluginabi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 )
 
 type fakeQuota struct {
@@ -69,16 +65,6 @@ func TestParseOpenusageCorruptExpiryIsStale(t *testing.T) {
 	}
 }
 
-func TestQuotaGateSortsResourceNames(t *testing.T) {
-	p := freshProviderAt(0, testNow)
-	p.Resources["session"] = quotaResource{Kind: "consumption", Remaining: 0, Limit: 100, ResetsAt: testNow.Add(time.Hour), WindowSeconds: 18000}
-	p.Resources["weekly"] = quotaResource{Kind: "consumption", Remaining: 0, Limit: 100, ResetsAt: testNow.Add(time.Hour), WindowSeconds: 604800}
-	got := quotaGate("codex", map[string]providerQuota{"codex": p}, testNow, false)
-	if got != "quota_exhausted:session" {
-		t.Fatalf("gate = %q, want sorted name session before weekly", got)
-	}
-}
-
 func TestParseRealOpenusage(t *testing.T) {
 	snap, err := parseOpenusage([]byte(realOpenusageFixture))
 	if err != nil {
@@ -96,153 +82,5 @@ func TestParseRealOpenusage(t *testing.T) {
 	}
 	if snap["openrouter"].Resources["balance"].Kind != "balance" {
 		t.Fatal("openrouter balance not normalized")
-	}
-}
-
-func TestQuotaGatePacing(t *testing.T) {
-	// Behind pace: 5% remaining with half the window left → paced out.
-	behind := freshProviderAt(5, testNow)
-	behind.Resources["weekly"] = quotaResource{Kind: "consumption", Remaining: 5, Limit: 100,
-		ResetsAt: testNow.Add(42 * time.Hour), WindowSeconds: 604800, Unit: "percent"}
-	snap := map[string]providerQuota{"codex": behind}
-	if got := quotaGate("codex", snap, testNow, false); !strings.HasPrefix(got, "quota_paced:weekly") {
-		t.Fatalf("gate = %q", got)
-	}
-	if got := quotaGate("codex", healthyQuota(), testNow, false); got != "" {
-		t.Fatalf("healthy gate = %q", got)
-	}
-}
-
-func TestQuotaGateStates(t *testing.T) {
-	stale := freshProviderAt(80, testNow)
-	stale.Stale = true
-	if got := quotaGate("codex", map[string]providerQuota{"codex": stale}, testNow, false); got != "quota_stale" {
-		t.Fatalf("stale gate = %q", got)
-	}
-	expired := freshProviderAt(80, testNow)
-	expired.ExpiresAt = testNow.Add(-time.Minute)
-	if got := quotaGate("codex", map[string]providerQuota{"codex": expired}, testNow, false); got != "quota_stale" {
-		t.Fatalf("expired gate = %q", got)
-	}
-	if got := quotaGate("codex", map[string]providerQuota{}, testNow, false); got != "quota_unknown" {
-		t.Fatalf("missing provider gate = %q", got)
-	}
-	exhausted := freshProviderAt(0, testNow)
-	if got := quotaGate("codex", map[string]providerQuota{"codex": exhausted}, testNow, false); got != "quota_exhausted:weekly" {
-		t.Fatalf("exhausted gate = %q", got)
-	}
-	paid := providerQuota{FetchedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
-		Resources: map[string]quotaResource{"balance": {Kind: "balance", Remaining: 5, Unit: "usd"}}}
-	if got := quotaGate("openrouter", map[string]providerQuota{"openrouter": paid}, testNow, false); got != "approval_required" {
-		t.Fatalf("balance gate = %q", got)
-	}
-	if got := quotaGate("openrouter", map[string]providerQuota{"openrouter": paid}, testNow, true); got != "" {
-		t.Fatalf("approved balance gate = %q", got)
-	}
-}
-
-func TestPacingChangesRoute(t *testing.T) {
-	freezeNow(t)
-	quota := healthyQuota()
-	paced := freshProviderAt(80, testNow)
-	paced.Resources["weekly"] = quotaResource{Kind: "consumption", Remaining: 2, Limit: 100,
-		ResetsAt: testNow.Add(20 * time.Hour), WindowSeconds: 604800, Unit: "percent"}
-	quota["codex"] = paced
-
-	backend := &fakeBackend{
-		result: leadResult{Text: "ok", Agent: "w2:p3"},
-		live: []herdrAgent{
-			{Name: "pi", Status: "idle", PaneID: "w1B:p1"},
-			{Name: "grok", Status: "idle", PaneID: "w2:p3"},
-		},
-	}
-	resetRouter(pluginConfig{RouterEnabled: true}, backend)
-	state.mu.Lock()
-	state.quota = fakeQuota{snap: quota}
-	state.mu.Unlock()
-
-	env := callMethod(t, pluginabi.MethodExecutorExecute,
-		execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
-	if !env.OK {
-		t.Fatalf("env = %+v", env)
-	}
-	call := backend.calls[0]
-	if call.Model != "grok-4.6" || call.Agent != "w2:p3" {
-		t.Fatalf("paced route = %+v", call)
-	}
-	state.mu.Lock()
-	d := state.decisions[len(state.decisions)-1]
-	state.mu.Unlock()
-	foundPaced := false
-	for _, s := range d.Skipped {
-		if strings.HasPrefix(s.Reason, "quota_paced:weekly") {
-			foundPaced = true
-		}
-	}
-	if !foundPaced {
-		t.Fatalf("decision skipped = %+v", d.Skipped)
-	}
-}
-
-func TestQuotaUnknownFailsClosed(t *testing.T) {
-	freezeNow(t)
-	backend := &fakeBackend{
-		result: leadResult{Text: "ok"},
-		live:   livePi,
-	}
-	resetRouter(pluginConfig{RouterEnabled: true}, backend)
-	state.mu.Lock()
-	state.quota = fakeQuota{snap: map[string]providerQuota{}}
-	state.mu.Unlock()
-	env := callMethod(t, pluginabi.MethodExecutorExecute,
-		execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
-	if env.OK || env.Error == nil || env.Error.Code != "no_eligible_candidate" {
-		t.Fatalf("env = %+v", env)
-	}
-	if !strings.Contains(env.Error.Message, "quota_unknown") {
-		t.Fatalf("message = %q", env.Error.Message)
-	}
-	if len(backend.calls) != 0 {
-		t.Fatal("unknown quota reached the lead backend")
-	}
-}
-
-func TestApprovalScopedToRetry(t *testing.T) {
-	freezeNow(t)
-	// A test-only paid-fallback candidate proves the gate: balance resources
-	// are never consumed without the explicit retry header.
-	paidCandidate := candidate{Label: "paid fallback", Kind: "opencode", Model: "m", Subscription: "openrouter", PolicyOK: true, Evidence: "test"}
-	old := preferenceOrder
-	preferenceOrder = append([]candidate{}, paidCandidate)
-	t.Cleanup(func() { preferenceOrder = old })
-
-	paid := providerQuota{FetchedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
-		Resources: map[string]quotaResource{"balance": {Kind: "balance", Remaining: 5, Unit: "usd"}}}
-	backend := &fakeBackend{
-		result: leadResult{Text: "ok", Agent: "w9:p1"},
-		live:   []herdrAgent{{Name: "opencode", Status: "idle", PaneID: "w9:p1"}},
-	}
-	resetRouter(pluginConfig{RouterEnabled: true}, backend)
-	state.mu.Lock()
-	state.quota = fakeQuota{snap: map[string]providerQuota{"openrouter": paid}}
-	state.mu.Unlock()
-
-	env := callMethod(t, pluginabi.MethodExecutorExecute,
-		execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`))
-	if env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "approval_required") {
-		t.Fatalf("no-approval env = %+v", env)
-	}
-	if len(backend.calls) != 0 {
-		t.Fatal("paid route ran without approval")
-	}
-
-	req := execRequest(virtualRouterModel, `{"messages":[{"role":"user","content":"hi"}]}`)
-	req.Headers = http.Header{"X-Fleet-Approve": {"retry"}}
-	env = callMethod(t, pluginabi.MethodExecutorExecute, req)
-	if !env.OK {
-		t.Fatalf("approved env = %+v", env)
-	}
-	if len(backend.calls) != 1 {
-		t.Fatal("approved retry did not reach the lead")
 	}
 }
