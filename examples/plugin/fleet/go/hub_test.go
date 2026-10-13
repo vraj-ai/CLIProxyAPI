@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +163,84 @@ func TestManagementDispatchStateOmitsRouter(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildHubStateReportsObservedPxpipeCompression(t *testing.T) {
+	cases := []struct {
+		name  string
+		stats string
+		want  *bool
+	}{
+		{name: "enabled", stats: `{"compression_enabled":true}`, want: boolPointer(true)},
+		{name: "disabled", stats: `{"compression_enabled":false}`, want: boolPointer(false)},
+		{name: "unknown", stats: `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".cli-proxy-api"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".cli-proxy-api", "config.yaml"), []byte("api-keys: []\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("PXPIPE_MODELS", "")
+
+			oldHostHTTP := hostHTTP
+			hostHTTP = func(req pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+				switch req.URL {
+				case pxpipeProxyURL + "/proxy-stats":
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(tc.stats)}, nil
+				case "http://127.0.0.1:47822/health":
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+				default:
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable}, nil
+				}
+			}
+			t.Cleanup(func() { hostHTTP = oldHostHTTP })
+
+			state.mu.Lock()
+			oldConfig, oldQuota, oldCache := state.config, state.quota, state.quotaCache
+			state.config = pluginConfig{PxpipeEnabled: true, PxpipeURL: "http://127.0.0.1:47822"}
+			state.quota = fakeQuota{snap: map[string]providerQuota{}}
+			state.quotaCache = struct {
+				at       time.Time
+				snap     map[string]providerQuota
+				err      error
+				fetching bool
+			}{}
+			state.mu.Unlock()
+			t.Cleanup(func() {
+				state.mu.Lock()
+				state.config, state.quota, state.quotaCache = oldConfig, oldQuota, oldCache
+				state.mu.Unlock()
+			})
+
+			got := buildHubState().Pxpipe
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			encoded, exists := payload["compressing"]
+			if tc.want == nil {
+				if exists {
+					t.Fatalf("unknown compression state was serialized as %s", encoded)
+				}
+				return
+			}
+			var compressing bool
+			if !exists || json.Unmarshal(encoded, &compressing) != nil || compressing != *tc.want {
+				t.Fatalf("compressing = %s, want %t; full pxpipe state %s", encoded, *tc.want, raw)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestManagementDispatchUnknown(t *testing.T) {
 	out, err := managementDispatch(&pluginapi.ManagementRequest{

@@ -105,7 +105,7 @@ func servedModels(cfg hubConfig) []string {
 type hubPxpipe struct {
 	ProxyURL    string   `json:"proxy_url"`
 	Reachable   bool     `json:"reachable"`
-	Compressing bool     `json:"compressing"`
+	Compressing *bool    `json:"compressing,omitempty"`
 	Scope       []string `json:"scope"`
 	ScopeSource string   `json:"scope_source"` // "config.json" | "env" | "default"
 	ShimURL     string   `json:"shim_url"`
@@ -407,12 +407,21 @@ func inPxpipeScope(scope []string, served string) bool {
 	return false
 }
 
-func pxpipeReachable() bool {
+func pxpipeStatus() (bool, *bool) {
 	resp, err := hostHTTPTimeout(pluginapi.HTTPRequest{
 		Method: http.MethodGet,
-		URL:    pxpipeProxyURL + "/api/stats.json",
+		URL:    pxpipeProxyURL + "/proxy-stats",
 	}, 2*time.Second)
-	return err == nil && resp != nil && resp.StatusCode == http.StatusOK
+	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+	var status struct {
+		Compressing *bool `json:"compression_enabled"`
+	}
+	if json.Unmarshal(resp.Body, &status) != nil {
+		return true, nil
+	}
+	return true, status.Compressing
 }
 
 func shimUp(cfg pluginConfig) bool {
@@ -432,6 +441,7 @@ func buildHubState() hubState {
 	pace := buildPaceView()
 	state.mu.Unlock()
 	models := servedModels(cfg)
+	pxpipeReachable, pxpipeCompressing := pxpipeStatus()
 	return hubState{
 		GeneratedAt: nowFunc().UTC().Format(time.RFC3339),
 		Link:        "http://127.0.0.1:8317",
@@ -447,7 +457,8 @@ func buildHubState() hubState {
 		Pace:      pace,
 		Pxpipe: hubPxpipe{
 			ProxyURL:    pxpipeProxyURL,
-			Reachable:   pxpipeReachable(),
+			Reachable:   pxpipeReachable,
+			Compressing: pxpipeCompressing,
 			Scope:       scope,
 			ScopeSource: scopeSrc,
 			ShimURL:     pluginCfg.PxpipeURL,
