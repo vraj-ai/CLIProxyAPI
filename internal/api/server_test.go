@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1826,6 +1827,25 @@ func TestHomeEnabledHidesManagementEndpointsAndControlPanel(t *testing.T) {
 			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
 		}
 	})
+}
+
+func TestManagementAssetIsServedVerbatim(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
+	staticDir := t.TempDir()
+	t.Setenv("MANAGEMENT_STATIC_PATH", staticDir)
+	asset := []byte("<!doctype html><html><body>native fleet app</body></html>")
+	if err := os.WriteFile(filepath.Join(staticDir, "management.html"), asset, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/management.html", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !bytes.Equal(rr.Body.Bytes(), asset) {
+		t.Fatalf("served management asset differs from source: %q", rr.Body.Bytes())
+	}
 }
 
 func TestExampleAPIKeySafeModeShowsWarningAndKeepsManagement(t *testing.T) {

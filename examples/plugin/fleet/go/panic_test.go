@@ -18,8 +18,8 @@ func TestHandleMethodNilQuotaUsesDefaultSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
-	resetRouter(pluginConfig{}, nil)
-	t.Cleanup(func() { resetRouter(pluginConfig{}, nil) })
+	resetState(pluginConfig{})
+	t.Cleanup(func() { resetState(pluginConfig{}) })
 	state.mu.Lock()
 	state.quota = nil
 	state.quotaCache.at = testNow.AddDate(-1, 0, 0)
@@ -44,13 +44,13 @@ func (panicQuota) fetch(context.Context) (map[string]providerQuota, error) {
 }
 
 func TestHandleMethodPanicReturnsErrorAndDoesNotWedgeQuota(t *testing.T) {
-	resetRouter(pluginConfig{}, nil)
+	resetState(pluginConfig{})
 	state.mu.Lock()
 	state.quota = panicQuota{}
 	state.quotaCache.at = testNow.AddDate(-1, 0, 0)
 	state.quotaCache.fetching = false
 	state.mu.Unlock()
-	t.Cleanup(func() { resetRouter(pluginConfig{}, nil) })
+	t.Cleanup(func() { resetState(pluginConfig{}) })
 
 	raw, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: "/v0/management/fleet/state"})
 	if _, err := handleMethod("management.handle", raw); err == nil {

@@ -3,77 +3,14 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	pluginapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
-
-func TestManagementDispatchHubPage(t *testing.T) {
-	resetRouter(pluginConfig{}, nil)
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/hub",
-	}, nil)
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
-		t.Fatalf("envelope: %v %s", err, out)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatalf("result: %v", err)
-	}
-	if ct := resp.Headers.Get("content-type"); !strings.Contains(ct, "text/html") {
-		t.Fatalf("content-type = %q", ct)
-	}
-	if !strings.Contains(string(resp.Body), "Quota") || !strings.Contains(string(resp.Body), `id="pace"`) ||
-		!strings.Contains(string(resp.Body), "featureModel") || !strings.Contains(string(resp.Body), "featureControls") ||
-		!strings.Contains(string(resp.Body), "global only") || !strings.Contains(string(resp.Body), `id="tab-providers"`) ||
-		!strings.Contains(string(resp.Body), `id="tab-activity"`) || !strings.Contains(string(resp.Body), `id="consoleframe"`) {
-		t.Fatalf("hub shell missing panels")
-	}
-	if !strings.Contains(string(resp.Body), `id="decisions"`) || !strings.Contains(string(resp.Body), `id="tab-activity"`) {
-		t.Fatal("unified shell must carry router decisions inside the Activity tab")
-	}
-}
-
-func TestShellQuotaReadsElapsedFrac(t *testing.T) {
-	// The state endpoint serializes the elapsed marker as elapsed_frac; the
-	// shell must read that field or the marker silently renders at zero.
-	page := withTheme(hubPageHTML)
-	if !strings.Contains(page, "r.elapsed_frac") {
-		t.Fatal("fleet shell quota renderer does not read elapsed_frac")
-	}
-	if strings.Contains(page, "r.paced_frac") {
-		t.Fatal("fleet shell quota renderer still reads the stale paced_frac field")
-	}
-}
-
-func TestShellQuotaTickRequiresFiniteElapsed(t *testing.T) {
-	out, err := shellPage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil {
-		t.Fatal(err)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatal(err)
-	}
-	page := string(resp.Body)
-	if strings.Contains(page, "? tick :") {
-		t.Fatal("served quota shell references the tick before initialization")
-	}
-	if !strings.Contains(page, "Number.isFinite(elapsed)") || !strings.Contains(page, "tick + '</div></div>'") {
-		t.Fatal("served quota shell must include a tick only for finite elapsed markers")
-	}
-}
 
 func TestHubQuotaOmitsUnknownElapsed(t *testing.T) {
 	freezeNow(t)
@@ -140,53 +77,59 @@ func TestManagementDispatchRejectsSuffixMatch(t *testing.T) {
 	}
 }
 
-func TestResourceRouterIsHTMLShell(t *testing.T) {
-	out, err := managementDispatch(&pluginapi.ManagementRequest{
-		Method: http.MethodGet,
-		Path:   "/v0/resource/plugins/fleet/router",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestLegacyFleetResourceRedirectsToNativeRoute(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/v0/resource/plugins/fleet/hub", "/management.html#/fleet"},
+		{"/v0/resource/plugins/fleet/keys", "/management.html#/fleet/access"},
+		{"/v0/resource/plugins/fleet/savings", "/management.html#/fleet/activity"},
+		{"/v0/resource/plugins/fleet/router", "/management.html#/fleet"},
 	}
-	var env envelope
-	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
-		t.Fatalf("envelope: %s", out)
-	}
-	var resp pluginapi.ManagementResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.ToLower(resp.Headers.Get("content-type")), "text/html") {
-		t.Fatalf("content-type = %q", resp.Headers.Get("content-type"))
-	}
-	if strings.Contains(string(resp.Body), `"readiness"`) {
-		t.Fatal("resource /router leaked diagnostics JSON")
-	}
-	// All legacy resource paths serve the same Fleet shell deep-linked by hash.
-	for _, p := range []string{"/v0/resource/plugins/fleet/savings", "/v0/resource/plugins/fleet/keys", "/v0/resource/plugins/fleet/hub"} {
-		out, err := managementDispatch(&pluginapi.ManagementRequest{Method: http.MethodGet, Path: p}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var e2 envelope
-		if err := json.Unmarshal(out, &e2); err != nil || !e2.OK {
-			t.Fatalf("envelope for %s: %s", p, out)
-		}
-		var r2 pluginapi.ManagementResponse
-		if err := json.Unmarshal(e2.Result, &r2); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(r2.Body), `id="tab-providers"`) {
-			t.Fatalf("%s did not serve the Fleet shell", p)
-		}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			out, err := managementDispatch(&pluginapi.ManagementRequest{Method: http.MethodGet, Path: tt.path}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var env envelope
+			if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+				t.Fatalf("envelope: %v %s", err, out)
+			}
+			var resp pluginapi.ManagementResponse
+			if err := json.Unmarshal(env.Result, &resp); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(resp.Body), tt.want) || strings.Contains(string(resp.Body), "<iframe") {
+				t.Fatalf("legacy page did not redirect directly to native route: %s", resp.Body)
+			}
+		})
 	}
 }
 
-func TestManagementDispatchState(t *testing.T) {
-	resetRouter(pluginConfig{RouterEnabled: true}, nil)
+func TestManagementDispatchStateOmitsRouter(t *testing.T) {
+	oldHostHTTP := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	t.Cleanup(func() { hostHTTP = oldHostHTTP })
 	state.mu.Lock()
-	state.config.RouterEnabled = true
+	oldQuota, oldCache := state.quota, state.quotaCache
+	state.quota = fakeQuota{snap: map[string]providerQuota{}}
+	state.quotaCache = struct {
+		at       time.Time
+		snap     map[string]providerQuota
+		err      error
+		fetching bool
+	}{}
 	state.mu.Unlock()
+	t.Cleanup(func() {
+		state.mu.Lock()
+		state.quota, state.quotaCache = oldQuota, oldCache
+		state.mu.Unlock()
+	})
+
 	out, err := managementDispatch(&pluginapi.ManagementRequest{
 		Method: http.MethodGet,
 		Path:   "/v0/management/fleet/state",
@@ -206,10 +149,98 @@ func TestManagementDispatchState(t *testing.T) {
 	if err := json.Unmarshal(resp.Body, &st); err != nil {
 		t.Fatalf("state decode: %v", err)
 	}
-	if !st.Flags.Router || !st.Router.Enabled {
-		t.Fatalf("router flag not reflected: %+v", st.Flags)
+	var body map[string]any
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	flags := body["flags"].(map[string]any)
+	if _, exists := flags["router"]; exists {
+		t.Fatalf("Fleet state exposes a router flag: %s", resp.Body)
+	}
+	for _, provider := range st.Providers {
+		if isLegacyFleetProvider("", provider.Name) {
+			t.Fatalf("Fleet state exposes a synthetic provider: %+v", provider)
+		}
 	}
 }
+
+func TestBuildHubStateReportsObservedPxpipeCompression(t *testing.T) {
+	cases := []struct {
+		name  string
+		stats string
+		want  *bool
+	}{
+		{name: "enabled", stats: `{"compression_enabled":true}`, want: boolPointer(true)},
+		{name: "disabled", stats: `{"compression_enabled":false}`, want: boolPointer(false)},
+		{name: "unknown", stats: `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".cli-proxy-api"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".cli-proxy-api", "config.yaml"), []byte("api-keys: []\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("PXPIPE_MODELS", "")
+
+			oldHostHTTP := hostHTTP
+			hostHTTP = func(req pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+				switch req.URL {
+				case pxpipeProxyURL + "/proxy-stats":
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(tc.stats)}, nil
+				case "http://127.0.0.1:47822/health":
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusOK}, nil
+				default:
+					return &pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable}, nil
+				}
+			}
+			t.Cleanup(func() { hostHTTP = oldHostHTTP })
+
+			state.mu.Lock()
+			oldConfig, oldQuota, oldCache := state.config, state.quota, state.quotaCache
+			state.config = pluginConfig{PxpipeEnabled: true, PxpipeURL: "http://127.0.0.1:47822"}
+			state.quota = fakeQuota{snap: map[string]providerQuota{}}
+			state.quotaCache = struct {
+				at       time.Time
+				snap     map[string]providerQuota
+				err      error
+				fetching bool
+			}{}
+			state.mu.Unlock()
+			t.Cleanup(func() {
+				state.mu.Lock()
+				state.config, state.quota, state.quotaCache = oldConfig, oldQuota, oldCache
+				state.mu.Unlock()
+			})
+
+			got := buildHubState().Pxpipe
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			encoded, exists := payload["compressing"]
+			if tc.want == nil {
+				if exists {
+					t.Fatalf("unknown compression state was serialized as %s", encoded)
+				}
+				return
+			}
+			var compressing bool
+			if !exists || json.Unmarshal(encoded, &compressing) != nil || compressing != *tc.want {
+				t.Fatalf("compressing = %s, want %t; full pxpipe state %s", encoded, *tc.want, raw)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestManagementDispatchUnknown(t *testing.T) {
 	out, err := managementDispatch(&pluginapi.ManagementRequest{
@@ -309,13 +340,6 @@ func TestPxpipeTransformSkips(t *testing.T) {
 	defer func() { hostHTTP = orig }()
 
 	body := []byte(`{"model":"gpt-6-astra","messages":[]}`)
-
-	if got := pxpipeTransform(cfg, "openai", virtualRouterModel, body); string(got) != string(body) {
-		t.Fatal("router model must bypass pxpipe")
-	}
-	if calls != 0 {
-		t.Fatal("router bypass still hit the shim")
-	}
 
 	marked := []byte(`{"model":"x","messages":[{"role":"system","content":"injected by pxpipe"}]}`)
 	if got := pxpipeTransform(cfg, "openai", "gpt-6-astra", marked); string(got) != string(marked) {

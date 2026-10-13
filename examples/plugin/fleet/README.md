@@ -1,8 +1,9 @@
 # Fleet Plugin
 
-vraj's fleet plugin: applies model-policy-controlled caveman + ponytail
-instructions to routed requests, serves the fleet switchboard (hub, keys, savings, router),
-and issues OpenRouter-style API keys for the models this proxy serves.
+vraj's Fleet plugin: applies model-policy-controlled caveman + ponytail
+instructions to requests, exposes Fleet management data, and issues client API
+keys for the models this proxy serves. The compatible React management app is
+the Fleet interface.
 
 ## Capabilities
 
@@ -12,13 +13,17 @@ and issues OpenRouter-style API keys for the models this proxy serves.
   is outside the calling key's grant, and 404s unusable ocg muse-spark ids.
 - `response_interceptor` — filters `/v1/models` to the calling key's grant
   and drops unusable compatibility ids.
-- `management_api` — registers Fleet Hub, Keys, Savings, and Router. Keys
-  JSON is key-gated at `/v0/management/fleet/keys`. The Keys HTML shell is
-  `/v0/resource/plugins/fleet/keys`. Grants live in
+- `management_api` — exposes key-gated Fleet state, savings, and key routes
+  under `/v0/management/fleet`. Legacy resource URLs redirect to native Fleet
+  views in `/management.html`. The management asset is served unchanged.
+  Grants live in
   `~/.cli-proxy-api/fleet-keys.json` (mode 0600). The secret is returned
   only on create.
 
-Fleet Hub Path controls select an exact served model and let it inherit or
+The plugin does not register a synthetic model, executor, or auth provider.
+Provider model selection remains in the proxy's normal routing path.
+
+Fleet access controls select an exact served model and let it inherit or
 override pxpipe, caveman, ponytail, Headroom, and RTK. Headroom runs as a
 separate OpenAI-compatible client proxy; RTK filters agent shell output. They
 are not provider-side hops.

@@ -8,8 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"sort"
 	"time"
 )
 
@@ -122,82 +120,11 @@ func parseOpenusage(out []byte) (map[string]providerQuota, error) {
 func (q *cliQuota) fetch(ctx context.Context) (map[string]providerQuota, error) {
 	out, err := q.run(ctx, q.bin, "--force")
 	if err != nil {
-		return nil, routerErr("quota_unavailable", fmt.Sprintf("openusage failed: %v", err), http.StatusServiceUnavailable)
+		return nil, fmt.Errorf("openusage failed: %w", err)
 	}
 	snap, err := parseOpenusage(out)
 	if err != nil {
-		return nil, routerErr("quota_unavailable", err.Error(), http.StatusServiceUnavailable)
+		return nil, err
 	}
 	return snap, nil
-}
-
-// quotaGate reports "" when the provider's allowance can cover the request,
-// else the explicit skip reason. Balance-only providers are approval-gated:
-// spending money needs an explicit retry approval, never an automatic route.
-func quotaGate(sub string, snap map[string]providerQuota, now time.Time, approved bool) string {
-	p, ok := snap[sub]
-	if !ok {
-		return "quota_unknown"
-	}
-	if p.Stale || (!p.ExpiresAt.IsZero() && now.After(p.ExpiresAt)) {
-		return "quota_stale"
-	}
-	hasConsumption := false
-	for _, r := range p.Resources {
-		if r.Kind == "consumption" {
-			hasConsumption = true
-		}
-	}
-	if len(p.Resources) == 0 {
-		return "quota_unknown"
-	}
-	if !hasConsumption {
-		if approved {
-			return ""
-		}
-		return "approval_required"
-	}
-	names := make([]string, 0, len(p.Resources))
-	for name := range p.Resources {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		r := p.Resources[name]
-		if r.Kind != "consumption" {
-			continue
-		}
-		if r.Remaining <= 0 {
-			return "quota_exhausted:" + name
-		}
-		if r.Limit > 0 && r.WindowSeconds > 0 && !r.ResetsAt.IsZero() {
-			// Sustainable pace: burn fraction must not outrun elapsed window
-			// fraction. Below the elapsed floor any usage looks unsustainable,
-			// so a fresh window never misfires.
-			left := r.ResetsAt.Sub(now).Seconds()
-			if left < 0 {
-				left = 0
-			}
-			leftFrac := left / float64(r.WindowSeconds)
-			if leftFrac > 1 {
-				leftFrac = 1
-			}
-			elapsed := 1 - leftFrac
-			if elapsed >= 0.05 && (1-r.Remaining/r.Limit)/elapsed > 1 {
-				return "quota_paced:" + name + " resets " + r.ResetsAt.UTC().Format(time.RFC3339)
-			}
-		}
-	}
-	return ""
-}
-
-// approvalGranted is the explicit, retry-scoped approval signal: the client
-// sends `x-fleet-approve: retry`. Nothing else authorizes a gated route.
-func approvalGranted(req *executorCallRequest) bool {
-	for _, v := range req.Headers.Values("x-fleet-approve") {
-		if v == "retry" {
-			return true
-		}
-	}
-	return false
 }

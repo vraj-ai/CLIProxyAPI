@@ -333,7 +333,7 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		}
 	}
 
-	c.Data(http.StatusOK, "text/html; charset=utf-8", injectConsoleInk(mustReadFile(c, filePath)))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", mustReadFile(c, filePath))
 }
 
 func mustReadFile(c *gin.Context, filePath string) []byte {
