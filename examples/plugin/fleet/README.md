@@ -23,6 +23,12 @@ the Fleet interface.
 The plugin does not register a synthetic model, executor, or auth provider.
 Provider model selection remains in the proxy's normal routing path.
 
+A client whose own system prompt already carries the caveman/ponytail style
+directive embeds the `fleet-style-owner` marker in its prompt; the proxy then
+skips re-injecting its copy so the model sees the directive once. Pi's
+SYSTEM.md owns the directive this way; all other clients get the injected
+text as before.
+
 Fleet access controls select an exact served model and let it inherit or
 override pxpipe, caveman, ponytail, Headroom, and RTK. Headroom runs as a
 separate OpenAI-compatible client proxy; RTK filters agent shell output. They
