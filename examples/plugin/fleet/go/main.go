@@ -28,6 +28,7 @@ import "C"
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -172,6 +173,13 @@ func configure(raw []byte) error {
 const cavemanText = "Reply in ultra-compressed technical English: drop filler, articles, and pleasantries while keeping full technical accuracy. Never compress security warnings, irreversible-action confirmations, or multi-step instructions."
 
 const ponytailText = "Choose the laziest solution that actually works: prefer deletion and minimal diffs, no speculative abstraction, no boilerplate. Mark deliberate simplifications with a `ponytail:` comment naming the ceiling and upgrade path."
+
+// styleOwnerMarker marks a request whose system prompt already owns the
+// caveman/ponytail style directive (Pi's SYSTEM.md carries it). The proxy
+// skips re-injecting so the model sees one copy. The marker travels inside
+// the request body so it works across every client protocol; like
+// pxpipeMarker it is a cooperation contract, not a security boundary.
+const styleOwnerMarker = "fleet-style-owner"
 
 func instructionText(cfg pluginConfig) string {
 	var parts []string
@@ -418,7 +426,8 @@ func intercept(raw []byte) ([]byte, error) {
 	state.pace.markRunning(req.RequestID, req.Model)
 	state.mu.Unlock()
 	body := pxpipeTransform(cfg, req.SourceFormat, req.Model, req.Body)
-	if modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models) {
+	clientOwnsStyle := bytes.Contains(body, []byte(styleOwnerMarker))
+	if !clientOwnsStyle && (modelAllowed(req.Model, cfg.Models) || modelAllowed(req.RequestedModel, cfg.Models)) {
 		// Resolved before locking: modelFeatureEnabled takes state.mu.
 		text, caveman, ponytail := instructionsForModel(cfg, req.Model)
 		if injected, ok := inject(text, req.SourceFormat, body); ok {

@@ -531,3 +531,81 @@ func TestRegistrationModelsFieldIsArray(t *testing.T) {
 		t.Fatalf("models description = %q", models.Description)
 	}
 }
+
+// piSystemExcerpt mirrors the style directive in harness/pi/SYSTEM.md
+// (vraj-ai/agentic-harness-setup). The wording is Pi's own; the
+// fleet-style-owner marker is the contract that tells the proxy Pi already
+// owns this directive.
+const piSystemExcerpt = "Use the Ponytail package and terse-output policy (fleet-style-owner): routine replies are concise, Caveman-style, and auditable."
+
+func countCopies(body []byte, needle string) int {
+	return bytes.Count(body, []byte(needle))
+}
+
+// TestPiStyleRequestDuplication measures how many copies of the
+// caveman/ponytail instruction text reach the model for a Pi-style request,
+// with injection on and off (fleet#176). Numbers are logged verbatim for the
+// audit trail.
+func TestPiStyleRequestDuplication(t *testing.T) {
+	mkBody := func(system string) []byte {
+		raw, err := json.Marshal(map[string]any{
+			"model":    "claude-x",
+			"system":   system,
+			"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	run := func(cfg pluginConfig, body []byte) pluginapi.RequestInterceptResponse {
+		resetState(cfg)
+		return runIntercept(t, pluginabi.MethodRequestInterceptBefore, pluginapi.RequestInterceptRequest{
+			SourceFormat: "claude",
+			Model:        "claude-x",
+			Body:         body,
+		})
+	}
+	on := pluginConfig{Caveman: true, Ponytail: true}
+	off := pluginConfig{Caveman: false, Ponytail: false}
+
+	// Pre-fix shape: Pi's style text without the marker. The proxy appended its
+	// own copy, so the model received the directive twice.
+	unmarked := mkBody(strings.Replace(piSystemExcerpt, " (fleet-style-owner)", "", 1))
+	resp := run(on, unmarked)
+	t.Logf("pi request, unmarked prompt, injection ON: cavemanText copies=%d ponytailText copies=%d appended bytes=%d",
+		countCopies(resp.Body, cavemanText), countCopies(resp.Body, ponytailText), len(resp.Body)-len(unmarked))
+
+	// Injection off: body passes through untouched, Pi's prompt is the only
+	// style directive.
+	resp = run(off, unmarked)
+	if !bytes.Equal(resp.Body, unmarked) {
+		t.Fatal("body changed with injection off")
+	}
+	t.Logf("pi request, injection OFF: cavemanText copies=%d ponytailText copies=%d appended bytes=0",
+		countCopies(resp.Body, cavemanText), countCopies(resp.Body, ponytailText))
+
+	// Pi owns the directive via the marker: the proxy must not re-inject.
+	piBody := mkBody(piSystemExcerpt)
+	resp = run(on, piBody)
+	if !bytes.Equal(resp.Body, piBody) {
+		t.Fatalf("pi-owned request was re-injected: %s", resp.Body)
+	}
+	state.mu.Lock()
+	inj := state.injections
+	state.mu.Unlock()
+	if inj != 0 {
+		t.Fatalf("injections = %d, want 0 for style-owner request", inj)
+	}
+	t.Logf("pi request, style-owner marker, injection ON: cavemanText copies=%d ponytailText copies=%d appended bytes=%d (single owner: pi prompt)",
+		countCopies(resp.Body, cavemanText), countCopies(resp.Body, ponytailText), len(resp.Body)-len(piBody))
+
+	// Non-Pi clients keep proxy injection.
+	plain := mkBody("be helpful")
+	resp = run(on, plain)
+	if countCopies(resp.Body, cavemanText) != 1 || countCopies(resp.Body, ponytailText) != 1 {
+		t.Fatalf("non-pi request lost injection: %s", resp.Body)
+	}
+	t.Logf("non-pi request, injection ON: cavemanText copies=%d ponytailText copies=%d appended bytes=%d",
+		countCopies(resp.Body, cavemanText), countCopies(resp.Body, ponytailText), len(resp.Body)-len(plain))
+}
