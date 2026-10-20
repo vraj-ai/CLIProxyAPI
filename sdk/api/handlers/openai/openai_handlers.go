@@ -79,7 +79,8 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	// Get all available models
 	allModels := h.Models()
 
-	// Filter to only include the 4 required fields: id, object, created, owned_by
+	// Filter to only include the known fields: id, object, created, owned_by,
+	// plus the additive input_modalities when the registry row declares it.
 	filteredModels := make([]map[string]any, len(allModels))
 	for i, model := range allModels {
 		filteredModel := map[string]any{
@@ -95,6 +96,15 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 		// Add owned_by field if it exists
 		if ownedBy, exists := model["owned_by"]; exists {
 			filteredModel["owned_by"] = ownedBy
+		}
+
+		// Preserve declared input modalities; rows without them omit the field.
+		if modalities, exists := model["input_modalities"]; exists {
+			if list, ok := modalities.([]string); ok {
+				filteredModel["input_modalities"] = append([]string(nil), list...)
+			} else {
+				filteredModel["input_modalities"] = modalities
+			}
 		}
 
 		filteredModels[i] = filteredModel
