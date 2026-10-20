@@ -357,3 +357,115 @@ func TestFleetKeyCreateRollsBackGrantOnProxyFailure(t *testing.T) {
 		t.Fatalf("orphan grant: %+v", store.Grants)
 	}
 }
+
+func TestFilterModelListCodexShape(t *testing.T) {
+	g := &fleetKeyGrant{Mode: grantModeList, Models: []string{"openai/"}}
+	allow := func(id string) bool { return catalogAllows(g, id) }
+	for _, tt := range []struct {
+		name string
+		body string
+		want []string
+		drop []string
+	}{
+		{
+			name: "filters by slug",
+			body: `{"models":[{"slug":"openai/gpt-6-astra","input_modalities":["text"]},{"slug":"xai/grok-4.6"}]}`,
+			want: []string{"openai/gpt-6-astra"},
+			drop: []string{"xai/grok-4.6"},
+		},
+		{
+			name: "preserves extra row fields",
+			body: `{"models":[{"slug":"openai/gpt-6-astra","description":"hi","x":1},{"slug":"xai/grok-4.6"}]}`,
+			want: []string{`"description":"hi"`, "openai/gpt-6-astra"},
+			drop: []string{"xai/grok-4.6"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out := filterModelList([]byte(tt.body), allow)
+			var doc map[string]any
+			if json.Unmarshal(out, &doc) != nil {
+				t.Fatal("invalid json")
+			}
+			models, ok := doc["models"].([]any)
+			if !ok {
+				t.Fatalf("shape lost: %s", out)
+			}
+			if len(models) != 1 {
+				t.Fatalf("len=%d body=%s", len(models), out)
+			}
+			if models[0].(map[string]any)["slug"] != "openai/gpt-6-astra" {
+				t.Fatalf("kept %v", models[0])
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(string(out), w) {
+					t.Fatalf("missing %s in %s", w, out)
+				}
+			}
+			for _, d := range tt.drop {
+				if strings.Contains(string(out), d) {
+					t.Fatalf("leaked %s in %s", d, out)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterModelListCodexShapeDeniesGrant(t *testing.T) {
+	secret := "sk-flt-11111111111111111111111111111111"
+	g, _ := normalizeGrant(fleetKeyGrant{
+		ID: "k_codex", Name: "list", Prefix: displayPrefix(secret),
+		KeyHash: hashSecret(secret), Mode: grantModeList, Models: []string{"openai/"},
+	})
+	if err := saveGrantStore(fleetKeyStore{Grants: []fleetKeyGrant{g}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(grantFilePath()) }()
+	req := pluginapi.ResponseInterceptRequest{
+		RequestHeaders:  http.Header{"Authorization": []string{"Bearer " + secret}},
+		ResponseHeaders: http.Header{"Content-Type": []string{"application/json"}},
+		Body:            []byte(`{"models":[{"slug":"openai/gpt-6-astra"},{"slug":"xai/grok-4.6"}]}`),
+	}
+	raw, _ := json.Marshal(req)
+	out, err := handleMethod(pluginabi.MethodResponseInterceptAfter, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env envelope
+	if json.Unmarshal(out, &env) != nil || !env.OK {
+		t.Fatalf("%s", out)
+	}
+	var resp pluginapi.ResponseInterceptResponse
+	if json.Unmarshal(env.Result, &resp) != nil {
+		t.Fatal("result")
+	}
+	if strings.Contains(string(resp.Body), "xai/grok-4.6") {
+		t.Fatalf("bypass through codex shape: %s", resp.Body)
+	}
+	if !strings.Contains(string(resp.Body), "openai/gpt-6-astra") {
+		t.Fatalf("dropped allowed: %s", resp.Body)
+	}
+}
+
+func TestMuseSparkNoLongerDenied(t *testing.T) {
+	_ = os.Remove(grantFilePath())
+	for _, id := range []string{"ocg/muse-spark-1.3-contributor", "ocg/muse-spark-1.2-contributor"} {
+		resp := runIntercept(t, pluginabi.MethodRequestInterceptBefore, pluginapi.RequestInterceptRequest{
+			SourceFormat: "openai",
+			Model:        id,
+			Headers:      http.Header{"Authorization": []string{"Bearer sk-legacy-not-a-grant"}},
+			Body:         []byte(`{"model":"` + id + `","messages":[{"role":"user","content":"hi"}]}`),
+		})
+		if resp.Terminate {
+			t.Fatalf("%s terminated status=%d body=%s", id, resp.StatusCode, resp.ResponseBody)
+		}
+	}
+	listed := filterModelList(
+		[]byte(`{"object":"list","data":[{"id":"ocg/muse-spark-1.3-contributor"},{"id":"ocg/muse-spark-1.2-contributor"},{"id":"ocg/glm-5.3"}]}`),
+		func(string) bool { return true },
+	)
+	for _, id := range []string{"ocg/muse-spark-1.3-contributor", "ocg/muse-spark-1.2-contributor", "ocg/glm-5.3"} {
+		if !strings.Contains(string(listed), id) {
+			t.Fatalf("missing %s in %s", id, listed)
+		}
+	}
+}
