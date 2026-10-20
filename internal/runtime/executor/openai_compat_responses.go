@@ -290,6 +290,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 			}
 			return
 		}
+		if !terminal && len(dataLines) > 0 && process() && !terminal {
+			return
+		}
 		if !terminal {
 			fail(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream closed before a terminal event"})
 			return
@@ -346,10 +349,10 @@ func authValue(auth *cliproxyauth.Auth) string {
 // the reporter already understands.
 func responsesUsageDetail(body []byte) *usage.Detail {
 	node := gjson.GetBytes(body, "response.usage")
-	if !node.Exists() {
+	if node.Type != gjson.JSON {
 		node = gjson.GetBytes(body, "usage")
 	}
-	if !node.Exists() {
+	if node.Type != gjson.JSON {
 		return nil
 	}
 	prompt := node.Get("input_tokens").Int()
