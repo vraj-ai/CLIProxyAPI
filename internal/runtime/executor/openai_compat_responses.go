@@ -232,6 +232,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 				return false
 			}
 			payload := bytes.TrimSpace(bytes.Join(lines, []byte("\n")))
+			if string(payload) == "[DONE]" {
+				return false
+			}
 			if !json.Valid(payload) {
 				return fail(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream ended with invalid JSON"})
 			}
@@ -314,6 +317,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 			return
 		}
 		if !terminal && len(dataLines) > 0 && process() && !terminal {
+			return
+		}
+		if !terminal && ctx.Err() != nil {
 			return
 		}
 		if !terminal {

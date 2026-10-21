@@ -138,3 +138,10 @@ func TestOpenAICompatExecutor_ResponsesStreamEmptyErrorEventFails(t *testing.T) 
 		t.Fatalf("want exactly one error, got %v", errs)
 	}
 }
+
+func TestOpenAICompatExecutor_ResponsesStreamIgnoresDoneSentinel(t *testing.T) {
+	errs := responsesStreamErrors(t, "event: response.completed\n"+`data: {"type":"response.completed","response":{"id":"r1"}}`+"\n\n"+"data: [DONE]\n\n")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors %v", errs)
+	}
+}
