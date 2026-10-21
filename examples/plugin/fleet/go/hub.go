@@ -626,6 +626,8 @@ func managementDispatch(req *pluginapi.ManagementRequest, raw []byte) ([]byte, e
 		return hubStateHandler()
 	case kind == "management" && rel == "/fleet/savings":
 		return savingsJSON()
+	case kind == "management" && rel == "/fleet/todos" && req.Method == http.MethodGet:
+		return todosHandler.handle()
 	case kind == "management" && rel == "/fleet/pxpipe/scope/toggle" && req.Method == http.MethodPost:
 		return pxpipeScopeToggle(req.Body)
 	case kind == "management" && rel == "/fleet/pxpipe/scope" && req.Method == http.MethodPost:

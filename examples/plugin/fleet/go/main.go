@@ -331,6 +331,7 @@ func handleMethod(method string, request []byte) (out []byte, err error) {
 		return okEnvelopeJSON(`{"routes":[
 			{"Method":"GET","Path":"/fleet/state"},
 			{"Method":"GET","Path":"/fleet/savings"},
+			{"Method":"GET","Path":"/fleet/todos"},
 			{"Method":"GET","Path":"/fleet/keys"},
 			{"Method":"POST","Path":"/fleet/keys"},
 			{"Method":"PATCH","Path":"/fleet/keys"},
