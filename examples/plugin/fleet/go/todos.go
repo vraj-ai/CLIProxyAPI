@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -17,6 +16,7 @@ const (
 	defaultTodosPath      = "/home/box/agent-data/engineering/todos.json"
 	todosCacheTTL         = 15 * time.Second
 	todosFetchTimeout     = 8 * time.Second
+	maxTodosBytes         = 262144
 )
 
 // todosResponse is the stable wire shape; every field is always present.
@@ -47,30 +47,16 @@ func newTodosReader() *todosReader {
 
 var todosHandler = newTodosReader()
 
-func todosSSHTarget() string {
-	if v := os.Getenv("FLEET_TODOS_SSH_TARGET"); v != "" {
-		return v
-	}
-	return defaultTodosSSHTarget
-}
-
-func todosPath() string {
-	if v := os.Getenv("FLEET_TODOS_PATH"); v != "" {
-		return v
-	}
-	return defaultTodosPath
-}
-
-// argv is a fixed vector handed straight to exec, never to a shell. Env
-// overrides can only replace the target or the remote path.
+// argv is a fixed vector handed straight to exec, never to a shell. The "--"
+// keeps the target from being parsed as an ssh option.
 func (t *todosReader) argv() []string {
 	return []string{
 		"ssh",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=4",
 		"-o", "StrictHostKeyChecking=accept-new",
-		todosSSHTarget(),
-		"cat", todosPath(),
+		"--", defaultTodosSSHTarget,
+		"cat", defaultTodosPath,
 	}
 }
 
@@ -86,6 +72,9 @@ func (t *todosReader) snapshot() todosResponse {
 	out, err := t.run(ctx, t.argv()...)
 	if err != nil {
 		return t.failure(now, "ssh failed: "+shortErr(err))
+	}
+	if len(out) > maxTodosBytes {
+		return t.failure(now, "todos file too large")
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return t.failure(now, "empty todos file")

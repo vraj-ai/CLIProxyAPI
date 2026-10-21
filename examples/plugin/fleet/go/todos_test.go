@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -100,8 +101,8 @@ func TestTodosReaderTable(t *testing.T) {
 }
 
 func TestTodosArgvIsFixedVector(t *testing.T) {
-	t.Setenv("FLEET_TODOS_SSH_TARGET", "")
-	t.Setenv("FLEET_TODOS_PATH", "")
+	t.Setenv("FLEET_TODOS_SSH_TARGET", "root@evil")
+	t.Setenv("FLEET_TODOS_PATH", "/etc/shadow")
 	runner := &fakeTodosRunner{out: []byte("{}")}
 	todos := &todosReader{run: runner.run, now: func() time.Time { return testNow }}
 	if _, err := todos.handle(); err != nil {
@@ -115,7 +116,7 @@ func TestTodosArgvIsFixedVector(t *testing.T) {
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=4",
 		"-o", "StrictHostKeyChecking=accept-new",
-		"box@grokbot-box",
+		"--", "box@grokbot-box",
 		"cat", "/home/box/agent-data/engineering/todos.json",
 	}
 	got := runner.argv[0]
@@ -126,6 +127,35 @@ func TestTodosArgvIsFixedVector(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("argv[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestTodosOversizeOutputIsFailure(t *testing.T) {
+	runner := &fakeTodosRunner{out: []byte(goodTodos)}
+	todos := &todosReader{run: runner.run, now: func() time.Time { return testNow }}
+	if got := todos.snapshot(); got.Raw != goodTodos || got.Stale {
+		t.Fatalf("prewarm = %+v", got)
+	}
+
+	runner.out = bytes.Repeat([]byte("x"), maxTodosBytes+1)
+	clock := testNow.Add(todosCacheTTL)
+	todos.now = func() time.Time { return clock }
+	got := todos.snapshot()
+	if !got.Stale || got.Error != "todos file too large" {
+		t.Fatalf("oversize = %+v", got)
+	}
+	if got.Raw != goodTodos {
+		t.Fatalf("raw = %q, want last good", got.Raw)
+	}
+
+	fresh := &todosReader{run: runner.run, now: func() time.Time { return testNow }}
+	if got := fresh.snapshot(); !got.Stale || got.Raw != "" || got.Error != "todos file too large" {
+		t.Fatalf("oversize without cache = %+v", got)
+	}
+
+	runner.out = bytes.Repeat([]byte("x"), maxTodosBytes)
+	if got := fresh.snapshot(); got.Stale || len(got.Raw) != maxTodosBytes {
+		t.Fatalf("exact cap = %+v", got)
 	}
 }
 
