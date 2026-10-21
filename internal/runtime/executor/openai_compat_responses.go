@@ -33,6 +33,9 @@ func (e *OpenAICompatExecutor) executeResponses(
 	if from != sdktranslator.FormatOpenAI && from != sdktranslator.FormatOpenAIResponse {
 		return resp, statusErr{code: http.StatusBadRequest, msg: "responses-upstream compat models support only openai or openai-response clients"}
 	}
+	if err := requireResponsesBridge(from); err != nil {
+		return resp, err
+	}
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai-response")
 	originalPayload := req.Payload
@@ -98,8 +101,8 @@ func (e *OpenAICompatExecutor) executeResponses(
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, body)
 	reporter.ObserveResponseModel(body)
-	if usage := responsesUsageDetail(body); usage != nil {
-		reporter.Publish(ctx, *usage)
+	if detail := responsesUsageDetail(body); detail != nil {
+		reporter.Publish(ctx, *detail)
 	}
 	reporter.EnsurePublished(ctx)
 
@@ -122,6 +125,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 	from := opts.SourceFormat
 	if from != sdktranslator.FormatOpenAI && from != sdktranslator.FormatOpenAIResponse {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "responses-upstream compat models support only openai or openai-response clients"}
+	}
+	if err := requireResponsesBridge(from); err != nil {
+		return nil, err
 	}
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai-response")
@@ -196,7 +202,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 		var eventName string
 		var dataLines [][]byte
 		terminal := false
+		failed := false
 		fail := func(streamErr statusErr) bool {
+			failed = true
 			helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 			reporter.PublishFailure(ctx, streamErr)
 			select {
@@ -231,10 +239,17 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 				}
 				return fail(statusErr{code: http.StatusBadGateway, msg: message})
 			}
-			if usage := responsesUsageDetail(payload); usage != nil {
-				reporter.Publish(ctx, *usage)
+			if detail := responsesUsageDetail(payload); detail != nil {
+				reporter.Publish(ctx, *detail)
 			}
 			reporter.ObserveResponseModel(payload)
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, payload); err == nil {
+				payload = compact.Bytes()
+			}
+			if strings.ContainsAny(eventType, "\r\n") {
+				eventType = ""
+			}
 			block := []byte("event: " + firstNonEmpty(eventType, "message") + "\ndata: " + string(payload) + "\n\n")
 			var chunks [][]byte
 			if from == sdktranslator.FormatOpenAIResponse && responseFormat == sdktranslator.FormatOpenAIResponse {
@@ -280,6 +295,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 			if bytes.HasPrefix(trimmed, []byte("{")) || bytes.HasPrefix(trimmed, []byte("[")) {
 				dataLines = append(dataLines, bytes.Clone(trimmed))
 			}
+		}
+		if failed {
+			return
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
@@ -368,9 +386,24 @@ func responsesUsageDetail(body []byte) *usage.Detail {
 	}
 	if cached := node.Get("input_tokens_details.cached_tokens").Int(); cached > 0 {
 		detail.CachedTokens = cached
+		detail.CacheReadTokens = cached
 	}
 	if reasoning := node.Get("output_tokens_details.reasoning_tokens").Int(); reasoning > 0 {
 		detail.ReasoningTokens = reasoning
 	}
 	return &detail
+}
+
+// requireResponsesBridge rejects chat clients when the openai to openai-response
+// translator pair is not registered, instead of forwarding a chat payload to
+// /responses.
+func requireResponsesBridge(from sdktranslator.Format) error {
+	if from == sdktranslator.FormatOpenAIResponse {
+		return nil
+	}
+	to := sdktranslator.FromString("openai-response")
+	if sdktranslator.HasRequestTransformer(from, to) && sdktranslator.HasNonStreamResponseTransformer(to, from) && sdktranslator.HasStreamResponseTransformer(to, from) {
+		return nil
+	}
+	return statusErr{code: http.StatusNotImplemented, msg: "openai to openai-response translator is not registered"}
 }

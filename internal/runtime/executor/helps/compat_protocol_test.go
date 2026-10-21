@@ -13,6 +13,7 @@ func TestCompatUpstreamProtocol(t *testing.T) {
 			{Name: "muse-spark-1.3-contributor", Alias: "muse-spark-1.3-contributor", Protocol: "responses"},
 			{Name: "glm-5.3", Alias: "glm-5.3"},
 			{Name: "alias-only", Alias: "alias-only", Protocol: "responses"},
+			{Name: "other", Alias: "muse-spark-1.3-contributor"},
 		},
 	}
 	cases := []struct {
@@ -25,6 +26,7 @@ func TestCompatUpstreamProtocol(t *testing.T) {
 		{"alias", "", "alias-only", "responses"},
 		{"prefixed alias", "", "opencode-go/alias-only", "responses"},
 		{"chat default", "glm-5.3", "glm-5.3", ""},
+		{"upstream name beats earlier alias", "glm-5.3", "muse-spark-1.3-contributor", ""},
 		{"unknown", "nope", "nope", ""},
 	}
 	for _, tc := range cases {

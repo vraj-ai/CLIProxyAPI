@@ -18,13 +18,18 @@ func CompatUpstreamProtocol(compat *config.OpenAICompatibility, upstreamModel, r
 	if requested != "" {
 		requested = strings.TrimPrefix(requested, compat.Name+"/")
 	}
-	for i := range compat.Models {
-		model := compat.Models[i]
-		if upstream != "" && strings.EqualFold(strings.TrimSpace(model.Name), upstream) {
-			return normalizeCompatProtocol(model.Protocol)
+	if upstream != "" {
+		for i := range compat.Models {
+			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Name), upstream) {
+				return normalizeCompatProtocol(compat.Models[i].Protocol)
+			}
 		}
-		if requested != "" && strings.EqualFold(strings.TrimSpace(model.Alias), requested) {
-			return normalizeCompatProtocol(model.Protocol)
+	}
+	if requested != "" {
+		for i := range compat.Models {
+			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Alias), requested) {
+				return normalizeCompatProtocol(compat.Models[i].Protocol)
+			}
 		}
 	}
 	return ""

@@ -75,3 +75,68 @@ func TestOpenAICompatExecutor_ResponsesStreamReportsFinalUsage(t *testing.T) {
 		t.Fatalf("recorded usage = %+v, want input 7 output 3 total 10", record.Detail)
 	}
 }
+
+func TestResponsesUsageDetail_MapsCachedTokensToCacheRead(t *testing.T) {
+	got := responsesUsageDetail([]byte(`{"response":{"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":4}}}}`))
+	if got == nil || got.CachedTokens != 4 || got.CacheReadTokens != 4 {
+		t.Fatalf("unexpected detail %+v", got)
+	}
+}
+
+func TestOpenAICompatExecutor_ResponsesStreamErrorEventReportsOnce(t *testing.T) {
+	stream := "event: error\n" +
+		`data: {"type":"error","error":{"message":"upstream exploded"}}` + "\n\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(stream))
+	}))
+	defer server.Close()
+
+	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{
+		OpenAICompatibility: []config.OpenAICompatibility{{
+			Name:   "compat",
+			Models: []config.OpenAICompatibilityModel{{Name: "resp-model", Alias: "resp-model", Protocol: "responses"}},
+		}},
+	})
+	auth := &cliproxyauth.Auth{
+		Provider: "openai-compatibility",
+		Attributes: map[string]string{
+			"base_url":     server.URL,
+			"api_key":      "test-key",
+			"compat_name":  "compat",
+			"provider_key": "compat",
+		},
+	}
+	res, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "resp-model",
+		Payload: []byte(`{"model":"resp-model","input":"hi","stream":true}`),
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai-response"),
+		Stream:       true,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	var errs []error
+	for chunk := range res.Chunks {
+		if chunk.Err != nil {
+			errs = append(errs, chunk.Err)
+		}
+	}
+	if len(errs) != 1 || errs[0].Error() != "upstream exploded" {
+		t.Fatalf("want exactly one error \"upstream exploded\", got %v", errs)
+	}
+}
+
+func TestRequireResponsesBridge(t *testing.T) {
+	if err := requireResponsesBridge(sdktranslator.FormatOpenAIResponse); err != nil {
+		t.Fatalf("openai-response clients need no bridge: %v", err)
+	}
+	to := sdktranslator.FromString("openai-response")
+	registered := sdktranslator.HasRequestTransformer(sdktranslator.FormatOpenAI, to) &&
+		sdktranslator.HasNonStreamResponseTransformer(to, sdktranslator.FormatOpenAI) &&
+		sdktranslator.HasStreamResponseTransformer(to, sdktranslator.FormatOpenAI)
+	if err := requireResponsesBridge(sdktranslator.FormatOpenAI); (err == nil) != registered {
+		t.Fatalf("bridge registered=%v but guard returned %v", registered, err)
+	}
+}
