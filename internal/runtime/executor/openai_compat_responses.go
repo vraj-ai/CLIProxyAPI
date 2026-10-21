@@ -30,14 +30,11 @@ func (e *OpenAICompatExecutor) executeResponses(
 	reporter *helps.UsageReporter,
 ) (resp cliproxyexecutor.Response, err error) {
 	from := opts.SourceFormat
-	if from != sdktranslator.FormatOpenAI && from != sdktranslator.FormatOpenAIResponse {
-		return resp, statusErr{code: http.StatusBadRequest, msg: "responses-upstream compat models support only openai or openai-response clients"}
-	}
-	if err := requireResponsesBridge(from); err != nil {
-		return resp, err
-	}
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai-response")
+	if err := requireResponsesBridge(from, responseFormat); err != nil {
+		return resp, err
+	}
 	originalPayload := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayload = opts.OriginalRequest
@@ -55,6 +52,10 @@ func (e *OpenAICompatExecutor) executeResponses(
 	translated = helps.ApplyPayloadConfigWithRequest(
 		e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers,
 	)
+	translated, err = e.applyPromptCacheKey(ctx, auth, from, baseModel, req, opts, translated)
+	if err != nil {
+		return resp, err
+	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + openAICompatResponsesPath
@@ -104,6 +105,11 @@ func (e *OpenAICompatExecutor) executeResponses(
 	if detail := responsesUsageDetail(body); detail != nil {
 		reporter.Publish(ctx, *detail)
 	}
+	if message, failed := responsesFailure(body); failed {
+		err = statusErr{code: http.StatusBadGateway, msg: message}
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
 	reporter.EnsurePublished(ctx)
 
 	var param any
@@ -123,14 +129,11 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 	reporter *helps.UsageReporter,
 ) (_ *cliproxyexecutor.StreamResult, err error) {
 	from := opts.SourceFormat
-	if from != sdktranslator.FormatOpenAI && from != sdktranslator.FormatOpenAIResponse {
-		return nil, statusErr{code: http.StatusBadRequest, msg: "responses-upstream compat models support only openai or openai-response clients"}
-	}
-	if err := requireResponsesBridge(from); err != nil {
-		return nil, err
-	}
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai-response")
+	if err := requireResponsesBridge(from, responseFormat); err != nil {
+		return nil, err
+	}
 	originalPayload := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayload = opts.OriginalRequest
@@ -148,6 +151,10 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 	translated = helps.ApplyPayloadConfigWithRequest(
 		e.cfg, baseModel, to.String(), from.String(), "", translated, originalTranslated, requestedModel, requestPath, opts.Headers,
 	)
+	translated, err = e.applyPromptCacheKey(ctx, auth, from, baseModel, req, opts, translated)
+	if err != nil {
+		return nil, err
+	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + openAICompatResponsesPath
@@ -219,6 +226,9 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 			lines := dataLines
 			dataLines = nil
 			if len(lines) == 0 {
+				if name == "error" {
+					return fail(statusErr{code: http.StatusBadGateway, msg: "upstream Responses stream sent an error event without data"})
+				}
 				return false
 			}
 			payload := bytes.TrimSpace(bytes.Join(lines, []byte("\n")))
@@ -251,12 +261,7 @@ func (e *OpenAICompatExecutor) executeResponsesStream(
 				eventType = ""
 			}
 			block := []byte("event: " + firstNonEmpty(eventType, "message") + "\ndata: " + string(payload) + "\n\n")
-			var chunks [][]byte
-			if from == sdktranslator.FormatOpenAIResponse && responseFormat == sdktranslator.FormatOpenAIResponse {
-				chunks = [][]byte{block}
-			} else {
-				chunks = sdktranslator.TranslateStream(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, block, &param)
-			}
+			chunks := sdktranslator.TranslateStream(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, block, &param)
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
@@ -394,16 +399,30 @@ func responsesUsageDetail(body []byte) *usage.Detail {
 	return &detail
 }
 
-// requireResponsesBridge rejects chat clients when the openai to openai-response
-// translator pair is not registered, instead of forwarding a chat payload to
-// /responses.
-func requireResponsesBridge(from sdktranslator.Format) error {
-	if from == sdktranslator.FormatOpenAIResponse {
-		return nil
-	}
+// requireResponsesBridge rejects clients whose request or response formats have
+// no registered translator to or from openai-response, instead of forwarding a
+// foreign payload to /responses.
+func requireResponsesBridge(from, responseFormat sdktranslator.Format) error {
 	to := sdktranslator.FromString("openai-response")
-	if sdktranslator.HasRequestTransformer(from, to) && sdktranslator.HasNonStreamResponseTransformer(to, from) && sdktranslator.HasStreamResponseTransformer(to, from) {
-		return nil
+	if from != to && !sdktranslator.HasRequestTransformer(from, to) {
+		return statusErr{code: http.StatusNotImplemented, msg: "no translator from " + from.String() + " to openai-response"}
 	}
-	return statusErr{code: http.StatusNotImplemented, msg: "openai to openai-response translator is not registered"}
+	if responseFormat != to && (!sdktranslator.HasStreamResponseTransformer(to, responseFormat) || !sdktranslator.HasNonStreamResponseTransformer(to, responseFormat)) {
+		return statusErr{code: http.StatusNotImplemented, msg: "no translator from openai-response to " + responseFormat.String()}
+	}
+	return nil
+}
+
+// responsesFailure reports a failed Responses object returned with a 2xx status.
+func responsesFailure(body []byte) (string, bool) {
+	root := gjson.ParseBytes(body)
+	errNode := root.Get("error")
+	if root.Get("status").String() != "failed" && (!errNode.Exists() || errNode.Type == gjson.Null) {
+		return "", false
+	}
+	message := errNode.Get("message").String()
+	if message == "" {
+		message = "upstream Responses request failed"
+	}
+	return message, true
 }

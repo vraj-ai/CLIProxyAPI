@@ -83,9 +83,8 @@ func TestResponsesUsageDetail_MapsCachedTokensToCacheRead(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatExecutor_ResponsesStreamErrorEventReportsOnce(t *testing.T) {
-	stream := "event: error\n" +
-		`data: {"type":"error","error":{"message":"upstream exploded"}}` + "\n\n"
+func responsesStreamErrors(t *testing.T, stream string) []error {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(stream))
@@ -123,20 +122,19 @@ func TestOpenAICompatExecutor_ResponsesStreamErrorEventReportsOnce(t *testing.T)
 			errs = append(errs, chunk.Err)
 		}
 	}
+	return errs
+}
+
+func TestOpenAICompatExecutor_ResponsesStreamErrorEventReportsOnce(t *testing.T) {
+	errs := responsesStreamErrors(t, "event: error\n"+`data: {"type":"error","error":{"message":"upstream exploded"}}`+"\n\n")
 	if len(errs) != 1 || errs[0].Error() != "upstream exploded" {
 		t.Fatalf("want exactly one error \"upstream exploded\", got %v", errs)
 	}
 }
 
-func TestRequireResponsesBridge(t *testing.T) {
-	if err := requireResponsesBridge(sdktranslator.FormatOpenAIResponse); err != nil {
-		t.Fatalf("openai-response clients need no bridge: %v", err)
-	}
-	to := sdktranslator.FromString("openai-response")
-	registered := sdktranslator.HasRequestTransformer(sdktranslator.FormatOpenAI, to) &&
-		sdktranslator.HasNonStreamResponseTransformer(to, sdktranslator.FormatOpenAI) &&
-		sdktranslator.HasStreamResponseTransformer(to, sdktranslator.FormatOpenAI)
-	if err := requireResponsesBridge(sdktranslator.FormatOpenAI); (err == nil) != registered {
-		t.Fatalf("bridge registered=%v but guard returned %v", registered, err)
+func TestOpenAICompatExecutor_ResponsesStreamEmptyErrorEventFails(t *testing.T) {
+	errs := responsesStreamErrors(t, "event: error\n\n")
+	if len(errs) != 1 {
+		t.Fatalf("want exactly one error, got %v", errs)
 	}
 }

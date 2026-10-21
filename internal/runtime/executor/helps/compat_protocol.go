@@ -7,7 +7,7 @@ import (
 )
 
 // CompatUpstreamProtocol resolves the wire protocol for a compatibility model.
-// The upstream name wins over the client alias. Only "responses" opts into the
+// The requested alias wins over the upstream name, so rows that share an upstream name resolve per alias. Only "responses" opts into the
 // Responses wire; every other value keeps the chat-completions path.
 func CompatUpstreamProtocol(compat *config.OpenAICompatibility, upstreamModel, requestedModel string) string {
 	if compat == nil {
@@ -18,16 +18,16 @@ func CompatUpstreamProtocol(compat *config.OpenAICompatibility, upstreamModel, r
 	if requested != "" {
 		requested = strings.TrimPrefix(requested, compat.Name+"/")
 	}
-	if upstream != "" {
+	if requested != "" {
 		for i := range compat.Models {
-			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Name), upstream) {
+			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Alias), requested) {
 				return normalizeCompatProtocol(compat.Models[i].Protocol)
 			}
 		}
 	}
-	if requested != "" {
+	if upstream != "" {
 		for i := range compat.Models {
-			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Alias), requested) {
+			if strings.EqualFold(strings.TrimSpace(compat.Models[i].Name), upstream) {
 				return normalizeCompatProtocol(compat.Models[i].Protocol)
 			}
 		}
