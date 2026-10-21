@@ -75,7 +75,7 @@ type hubQuotaProvider struct {
 // disabled auths and compat entries.
 func servedModels(cfg hubConfig) []string {
 	if len(cfg.APIKeys) == 0 {
-		return nil
+		return []string{}
 	}
 	resp, err := hostHTTPTimeout(pluginapi.HTTPRequest{
 		Method:  http.MethodGet,
@@ -83,7 +83,7 @@ func servedModels(cfg hubConfig) []string {
 		Headers: http.Header{"authorization": []string{"Bearer " + cfg.APIKeys[0]}},
 	}, 3*time.Second)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
-		return nil
+		return []string{}
 	}
 	var doc struct {
 		Data []struct {
@@ -91,7 +91,7 @@ func servedModels(cfg hubConfig) []string {
 		} `json:"data"`
 	}
 	if json.Unmarshal(resp.Body, &doc) != nil {
-		return nil
+		return []string{}
 	}
 	out := make([]string, 0, len(doc.Data))
 	for _, m := range doc.Data {
@@ -211,7 +211,7 @@ func maskAuthFile(name string) string {
 }
 
 func buildProviders(cfg hubConfig, auths []authFileView) []hubProvider {
-	var out []hubProvider
+	out := []hubProvider{}
 	excludedAll := map[string]bool{}
 	for p, pats := range cfg.OAuthExcluded {
 		for _, pat := range pats {
@@ -297,12 +297,15 @@ func quotaCached() (map[string]providerQuota, error) {
 func buildQuota() []hubQuotaProvider {
 	snap, err := quotaCached()
 	if err != nil {
-		return nil
+		return []hubQuotaProvider{}
 	}
 	now := nowFunc()
 	out := make([]hubQuotaProvider, 0, len(snap))
 	for name, p := range snap {
-		qp := hubQuotaProvider{Name: name, Plan: p.Plan, Stale: p.Stale}
+		qp := hubQuotaProvider{
+			Name: name, Plan: p.Plan, Stale: p.Stale,
+			Resources: make([]hubQuotaResource, 0, len(p.Resources)),
+		}
 		for rn, r := range p.Resources {
 			qr := hubQuotaResource{
 				Name: rn, Kind: r.Kind, Remaining: r.Remaining, Limit: r.Limit,
@@ -350,7 +353,7 @@ func pxpipeScope() ([]string, string) {
 				return out, "config.json"
 			case string:
 				if strings.EqualFold(strings.TrimSpace(v), "off") {
-					return nil, "config.json"
+					return []string{}, "config.json"
 				}
 			}
 		}

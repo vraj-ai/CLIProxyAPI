@@ -335,7 +335,7 @@ func publicGrantsForHub() []publicGrant {
 	store, err := loadGrantStore()
 	grantsMu.Unlock()
 	if err != nil {
-		return nil
+		return []publicGrant{}
 	}
 	out := make([]publicGrant, 0, len(store.Grants))
 	for _, g := range store.Grants {

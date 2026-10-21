@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -358,4 +359,83 @@ func TestPxpipeTransformSkips(t *testing.T) {
 	if got := pxpipeTransform(cfg, "openai", "gpt-6-astra", body); string(got) != string(body) {
 		t.Fatal("disabled shim must pass through")
 	}
+}
+
+// The Management Center maps these arrays unguarded, so a nil slice (JSON null)
+// crashes the Fleet page.
+func TestHubStateEmitsEmptyArraysNotNull(t *testing.T) {
+	freezeNow(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PXPIPE_MODELS", "")
+	if err := os.MkdirAll(filepath.Join(home, ".config", "pxpipe"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "pxpipe", "config.json"), []byte(`{"models":"off"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldGrantPath := grantFilePath
+	grantFilePath = func() string { return filepath.Join(home, "fleet-keys.json") }
+	t.Cleanup(func() { grantFilePath = oldGrantPath })
+	if err := os.WriteFile(grantFilePath(), []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldHostHTTP := hostHTTP
+	hostHTTP = func(pluginapi.HTTPRequest) (*pluginapi.HTTPResponse, error) {
+		return &pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	t.Cleanup(func() { hostHTTP = oldHostHTTP })
+
+	setQuota := func(src quotaSource) {
+		state.mu.Lock()
+		state.quota = src
+		state.quotaCache.at = time.Time{}
+		state.quotaCache.fetching = false
+		state.mu.Unlock()
+	}
+	state.mu.Lock()
+	oldQuota, oldCache := state.quota, state.quotaCache
+	state.mu.Unlock()
+	t.Cleanup(func() {
+		state.mu.Lock()
+		state.quota, state.quotaCache = oldQuota, oldCache
+		state.mu.Unlock()
+	})
+
+	decode := func() map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(buildHubState())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	requireArray := func(label string, v any) []any {
+		t.Helper()
+		arr, ok := v.([]any)
+		if !ok {
+			t.Fatalf("%s = %#v, want a JSON array", label, v)
+		}
+		return arr
+	}
+
+	setQuota(fakeQuota{err: errors.New("quota offline")})
+	doc := decode()
+	requireArray("providers", doc["providers"])
+	requireArray("models", doc["models"])
+	requireArray("quota (fetch failed)", doc["quota"])
+	requireArray("keys", doc["keys"])
+	requireArray("pxpipe.scope", doc["pxpipe"].(map[string]any)["scope"])
+
+	setQuota(fakeQuota{snap: map[string]providerQuota{"bare": {Plan: "free"}}})
+	quota := requireArray("quota", decode()["quota"])
+	if len(quota) != 1 {
+		t.Fatalf("quota = %#v", quota)
+	}
+	requireArray("quota[0].resources", quota[0].(map[string]any)["resources"])
 }
