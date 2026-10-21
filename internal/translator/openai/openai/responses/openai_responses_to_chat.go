@@ -41,9 +41,7 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(_ context.Context, mo
 		state.id = chatID(response.Get("id").String())
 		state.created = response.Get("created_at").Int()
 		state.model = firstNonEmpty(response.Get("model").String(), modelName)
-		chunk := state.chunk(map[string]any{"role": "assistant"}, nil, nil)
-		state.roleSent = true
-		return [][]byte{chunk}
+		return [][]byte{state.chunk(map[string]any{"role": "assistant"}, nil, nil)}
 	case "response.output_item.added":
 		item := root.Get("item")
 		if item.Get("type").String() != "function_call" {
@@ -67,9 +65,6 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(_ context.Context, mo
 		if delta == "" {
 			return nil
 		}
-		if !state.roleSent {
-			state.roleSent = true
-		}
 		return [][]byte{state.chunk(map[string]any{"content": delta}, nil, nil)}
 	case "response.function_call_arguments.delta":
 		index := state.toolIndex(root.Get("item_id").String(), root.Get("call_id").String())
@@ -87,7 +82,7 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(_ context.Context, mo
 			finish = "tool_calls"
 		}
 		if eventType == "response.incomplete" {
-			finish = "length"
+			finish = incompleteFinishReason(response.Get("incomplete_details.reason").String())
 		}
 		return [][]byte{state.chunk(map[string]any{}, finish, usage)}
 	default:
@@ -95,15 +90,25 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletions(_ context.Context, mo
 	}
 }
 
+func incompleteFinishReason(reason string) string {
+	if reason == "content_filter" {
+		return "content_filter"
+	}
+	return "length"
+}
+
 func (s *responsesToChatState) toolIndex(itemID, callID string) int {
-	key := firstNonEmpty(itemID, callID)
-	if index, ok := s.tools[key]; ok {
-		return index
+	for _, key := range []string{itemID, callID} {
+		if index, ok := s.tools[key]; key != "" && ok {
+			return index
+		}
 	}
 	index := s.nextTool
 	s.nextTool++
-	if key != "" {
-		s.tools[key] = index
+	for _, key := range []string{itemID, callID} {
+		if key != "" {
+			s.tools[key] = index
+		}
 	}
 	return index
 }
@@ -113,14 +118,19 @@ func (s *responsesToChatState) chunk(delta map[string]any, finish any, usage map
 	if id == "" {
 		id = "chatcmpl-responses"
 	}
-	created := s.created
-	if created == 0 {
-		created = time.Now().Unix()
+	if s.created == 0 {
+		s.created = time.Now().Unix()
+	}
+	if !s.roleSent {
+		s.roleSent = true
+		if _, ok := delta["role"]; !ok {
+			delta["role"] = "assistant"
+		}
 	}
 	body := map[string]any{
 		"id":      id,
 		"object":  "chat.completion.chunk",
-		"created": created,
+		"created": s.created,
 		"model":   firstNonEmpty(s.model, "unknown"),
 		"choices": []any{map[string]any{
 			"index":         0,
@@ -158,13 +168,16 @@ func ConvertOpenAIResponsesResponseToOpenAIChatCompletionsNonStream(_ context.Co
 	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
-		message["content"] = nil
+		if text == "" {
+			message["content"] = nil
+		}
 	}
 	finish := "stop"
 	if len(toolCalls) > 0 {
 		finish = "tool_calls"
-	} else if response.Get("status").String() == "incomplete" || response.Get("incomplete_details.reason").String() == "max_output_tokens" {
-		finish = "length"
+	}
+	if response.Get("status").String() == "incomplete" {
+		finish = incompleteFinishReason(response.Get("incomplete_details.reason").String())
 	}
 	created := response.Get("created_at").Int()
 	if created == 0 {
@@ -269,6 +282,9 @@ func responsesEvent(raw []byte) (string, gjson.Result) {
 	}
 	if len(data) == 0 {
 		data = []byte(strings.TrimSpace(string(raw)))
+	}
+	if !gjson.ValidBytes(data) {
+		return "", gjson.Result{}
 	}
 	return event, gjson.ParseBytes(data)
 }

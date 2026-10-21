@@ -134,3 +134,74 @@ func TestResponsesStreamToolCall(t *testing.T) {
 		t.Fatalf("finish = %s", final[0])
 	}
 }
+
+func TestChatRequestToResponsesDefaultsStoreFalse(t *testing.T) {
+	out := ConvertOpenAIChatCompletionsRequestToOpenAIResponses("m", []byte(`{"messages":[{"role":"user","content":"hi"}]}`), false)
+	if v := gjson.GetBytes(out, "store"); !v.Exists() || v.Bool() {
+		t.Fatalf("store = %s, want false", v.Raw)
+	}
+	out = ConvertOpenAIChatCompletionsRequestToOpenAIResponses("m", []byte(`{"store":true,"messages":[{"role":"user","content":"hi"}]}`), false)
+	if !gjson.GetBytes(out, "store").Bool() {
+		t.Fatal("explicit store=true must be kept")
+	}
+}
+
+func TestResponsesStreamWithoutCreatedStillSendsRoleOnce(t *testing.T) {
+	var param any
+	ctx := context.Background()
+	first := ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx, "m", nil, nil, []byte(`data: {"type":"response.output_text.delta","delta":"a"}`), &param)
+	second := ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx, "m", nil, nil, []byte(`data: {"type":"response.output_text.delta","delta":"b"}`), &param)
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("chunks = %d, %d", len(first), len(second))
+	}
+	if got := gjson.GetBytes(first[0], "choices.0.delta.role").String(); got != "assistant" {
+		t.Fatalf("first delta role = %q", got)
+	}
+	if gjson.GetBytes(second[0], "choices.0.delta.role").Exists() {
+		t.Fatalf("role repeated: %s", second[0])
+	}
+	if gjson.GetBytes(first[0], "created").Int() != gjson.GetBytes(second[0], "created").Int() {
+		t.Fatal("created drifted between chunks")
+	}
+}
+
+func TestResponsesStreamToolDeltaKeyedByCallIDReusesIndex(t *testing.T) {
+	var param any
+	ctx := context.Background()
+	ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx, "m", nil, nil, []byte(`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup"}}`), &param)
+	delta := ConvertOpenAIResponsesResponseToOpenAIChatCompletions(ctx, "m", nil, nil, []byte(`data: {"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"{}"}`), &param)
+	if len(delta) != 1 || gjson.GetBytes(delta[0], "choices.0.delta.tool_calls.0.index").Int() != 0 {
+		t.Fatalf("delta = %s", delta)
+	}
+}
+
+func TestResponsesStreamIgnoresHeaderOnlyLines(t *testing.T) {
+	var param any
+	out := ConvertOpenAIResponsesResponseToOpenAIChatCompletions(context.Background(), "m", nil, nil, []byte("event: response.completed"), &param)
+	if len(out) != 0 {
+		t.Fatalf("header-only line produced %s", out)
+	}
+}
+
+func TestResponsesIncompleteFinishReasons(t *testing.T) {
+	var param any
+	out := ConvertOpenAIResponsesResponseToOpenAIChatCompletions(context.Background(), "m", nil, nil,
+		[]byte(`data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"content_filter"}}}`), &param)
+	if len(out) != 1 || gjson.GetBytes(out[0], "choices.0.finish_reason").String() != "content_filter" {
+		t.Fatalf("stream = %s", out)
+	}
+	body := ConvertOpenAIResponsesResponseToOpenAIChatCompletionsNonStream(context.Background(), "m", nil, nil,
+		[]byte(`{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`), &param)
+	if gjson.GetBytes(body, "choices.0.finish_reason").String() != "length" {
+		t.Fatalf("non-stream = %s", body)
+	}
+}
+
+func TestResponsesNonStreamKeepsTextAlongsideToolCalls(t *testing.T) {
+	body := ConvertOpenAIResponsesResponseToOpenAIChatCompletionsNonStream(context.Background(), "m", nil, nil,
+		[]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","call_id":"c1","name":"f","arguments":"{}"}]}`), nil)
+	if gjson.GetBytes(body, "choices.0.message.content").String() != "hello" ||
+		gjson.GetBytes(body, "choices.0.message.tool_calls.0.id").String() != "c1" {
+		t.Fatalf("body = %s", body)
+	}
+}

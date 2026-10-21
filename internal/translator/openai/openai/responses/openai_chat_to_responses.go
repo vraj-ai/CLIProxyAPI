@@ -41,9 +41,7 @@ func ConvertOpenAIChatCompletionsRequestToOpenAIResponses(modelName string, inpu
 	if v := root.Get("parallel_tool_calls"); v.Exists() {
 		out["parallel_tool_calls"] = v.Bool()
 	}
-	if v := root.Get("store"); v.Exists() {
-		out["store"] = v.Bool()
-	}
+	out["store"] = root.Get("store").Bool()
 	if v := root.Get("metadata"); v.Exists() {
 		out["metadata"] = v.Value()
 	}
