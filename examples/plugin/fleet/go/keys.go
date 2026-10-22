@@ -322,36 +322,75 @@ func filterModelList(body []byte, allow func(string) bool) []byte {
 	if json.Unmarshal(body, &doc) != nil {
 		return body
 	}
-	if obj, _ := doc["object"].(string); obj != "list" {
-		return body
+	filtered := false
+	if obj, _ := doc["object"].(string); obj == "list" {
+		if data, ok := doc["data"].([]any); ok {
+			kept := keepDataRows(data, allow)
+			if kept == nil {
+				return body
+			}
+			doc["data"] = kept
+			filtered = true
+		}
 	}
-	data, ok := doc["data"].([]any)
-	if !ok {
-		return body
-	}
-	for _, item := range data {
-		row, ok := item.(map[string]any)
-		if !ok {
+	if models, ok := doc["models"].([]any); ok {
+		kept := keepSlugRows(models, allow)
+		if kept == nil {
 			return body
 		}
-		if _, ok := row["id"].(string); !ok {
-			return body
-		}
+		doc["models"] = kept
+		filtered = true
 	}
-	kept := make([]any, 0, len(data))
-	for _, item := range data {
-		obj := item.(map[string]any)
-		id, _ := obj["id"].(string)
-		if !isLegacyFleetModel(id) && allow(id) {
-			kept = append(kept, obj)
-		}
+	if !filtered {
+		return body
 	}
-	doc["data"] = kept
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return body
 	}
 	return out
+}
+
+func keepDataRows(data []any, allow func(string) bool) []any {
+	for _, item := range data {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if _, ok := row["id"].(string); !ok {
+			return nil
+		}
+	}
+	kept := make([]any, 0, len(data))
+	for _, item := range data {
+		row := item.(map[string]any)
+		id, _ := row["id"].(string)
+		if !isLegacyFleetModel(id) && allow(id) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
+}
+
+func keepSlugRows(models []any, allow func(string) bool) []any {
+	for _, item := range models {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if _, ok := row["slug"].(string); !ok {
+			return nil
+		}
+	}
+	kept := make([]any, 0, len(models))
+	for _, item := range models {
+		row := item.(map[string]any)
+		slug, _ := row["slug"].(string)
+		if !isLegacyFleetModel(slug) && allow(slug) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }
 
 func publicFromGrant(g fleetKeyGrant, liveHashes map[string]struct{}) publicGrant {

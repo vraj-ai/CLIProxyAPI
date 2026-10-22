@@ -101,6 +101,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		err = statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL"}
 		return
 	}
+	if opts.Alt != "responses/compact" && helps.CompatUpstreamProtocol(e.resolveCompatConfig(auth), baseModel, helps.PayloadRequestedModel(opts, req.Model)) == "responses" {
+		return e.executeResponses(ctx, auth, req, opts, baseModel, baseURL, apiKey, reporter)
+	}
 
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
@@ -323,6 +326,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	if baseURL == "" {
 		err = statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL"}
 		return nil, err
+	}
+	if opts.Alt != "responses/compact" && helps.CompatUpstreamProtocol(e.resolveCompatConfig(auth), baseModel, helps.PayloadRequestedModel(opts, req.Model)) == "responses" {
+		return e.executeResponsesStream(ctx, auth, req, opts, baseModel, baseURL, apiKey, reporter)
 	}
 
 	from := opts.SourceFormat

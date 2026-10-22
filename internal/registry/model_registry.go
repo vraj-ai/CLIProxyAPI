@@ -1645,6 +1645,33 @@ func (r *ModelRegistry) GetModelInfo(modelID, provider string) *ModelInfo {
 	return nil
 }
 
+// normalizeInputModalities lowercases and dedupes the model's declared input
+// modalities. It returns nil unless the registry row explicitly declares
+// modalities, so permissive template defaults never leak into the generic
+// model list. Callers omit the field when the result is empty.
+func normalizeInputModalities(model *ModelInfo) []string {
+	if model == nil || !model.ExplicitInputModalities {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(model.SupportedInputModalities))
+	out := make([]string, 0, len(model.SupportedInputModalities))
+	for _, raw := range model.SupportedInputModalities {
+		modality := strings.ToLower(strings.TrimSpace(raw))
+		if modality == "" {
+			continue
+		}
+		if _, dup := seen[modality]; dup {
+			continue
+		}
+		seen[modality] = struct{}{}
+		out = append(out, modality)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // convertModelToMap converts ModelInfo to the appropriate format for different handler types
 func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) map[string]any {
 	if model == nil {
@@ -1684,6 +1711,9 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		}
 		if len(model.SupportedParameters) > 0 {
 			result["supported_parameters"] = append([]string(nil), model.SupportedParameters...)
+		}
+		if modalities := normalizeInputModalities(model); len(modalities) > 0 {
+			result["input_modalities"] = modalities
 		}
 		return result
 
