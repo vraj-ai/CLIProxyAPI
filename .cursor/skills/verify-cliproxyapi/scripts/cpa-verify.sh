@@ -69,14 +69,14 @@ expect_body() { grep -q -- "$2" "$EVD/$1.body" && echo "  PASS $1 body~/$2/" || 
 
 redact() {
   local k m; k="$(st apikey)"; m="$(st mgmtkey)"
-  local dir; dir="$(st evidence)"
-  [ -n "$dir" ] && [ -d "$dir" ] && [ -n "$k" ] && find "$dir" -type f -exec sed -i -e "s/$k/<api-key>/g" -e "s/$m/<mgmt-key>/g" -E -e 's/(secret-key"?: *"?)[^",]+/\1<redacted>/g' {} + || true
+  # Only touch files this drive wrote: the feature dir, newer than the drive-start marker.
+  [ -n "${EVD:-}" ] && [ -d "$EVD" ] && [ -f "$RUN/drive-start" ] && [ -n "$k" ] && find "$EVD" -type f -newer "$RUN/drive-start" -exec sed -i -e "s/$k/<api-key>/g" -e "s/$m/<mgmt-key>/g" -E -e 's/(secret-key"?: *"?)[^",]+/\1<redacted>/g' {} + || true
 }
 
 drive() {
   doctor >/dev/null
   local f="${1:?feature: health|models|management|chat-completions|cli}"; local B="http://127.0.0.1:$(st port)" K; K="$(st apikey)"; local M; M="$(st mgmtkey)"
-  EVD="$(st evidence)/$f"; mkdir -p "$EVD"; chmod 700 "$EVD"; FAILS=0
+  EVD="$(st evidence)/$f"; touch "$RUN/drive-start"; sleep 0.1; mkdir -p "$EVD"; chmod 700 "$EVD"; FAILS=0
   case "$f" in
     health)
       req healthz "$B/healthz"; expect healthz 200
@@ -123,6 +123,7 @@ case "${1:-}" in
   all)
     shift
     features=("$@"); [ "$#" -gt 0 ] || features=(health models management chat-completions cli)
+    [ -f "$RUN/pid" ] && kill -0 "$(st pid)" 2>/dev/null && die "instance already running (pid $(st pid)); run cleanup first"
     trap 'rc=$?; trap - EXIT; redact; cleanup || true; exit $rc' EXIT
     launch; doctor; rc=0
     for f in "${features[@]}"; do drive "$f" || rc=1; done
