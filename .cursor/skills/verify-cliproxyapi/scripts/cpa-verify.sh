@@ -5,6 +5,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 RUN="${CPA_RUN:-/tmp/cpa-verify-run}"
+case "$RUN" in /*) ;; *) RUN="$PWD/$RUN" ;; esac
+umask 077
 st() { cat "$RUN/$1" 2>/dev/null || true; }
 die() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -31,7 +33,10 @@ debug: false
 YAML
   (cd "$REPO" && go build -o "$RUN/cli-proxy-api" ./cmd/server) || die "go build failed"
   (cd "$RUN" && git -C "$REPO" rev-parse --short HEAD >"$RUN/rev")
-  cd "$RUN"; nohup "$RUN/cli-proxy-api" -config "$RUN/config.yaml" -local-model >"$RUN/server.log" 2>&1 </dev/null &
+  # Drop inherited storage/home env so the scratch instance can never reach a live backend.
+  local -a unset_env=()
+  while IFS= read -r name; do unset_env+=(-u "$name"); done < <(env | sed -n -E 's/^((PGSTORE|GITSTORE|OBJECTSTORE|HOME_JWT|DEPLOY)[A-Za-z0-9_]*)=.*/\1/Ip;s/^((pgstore|gitstore|objectstore|home_jwt)[A-Za-z0-9_]*)=.*/\1/p' | sort -u)
+  cd "$RUN"; nohup env "${unset_env[@]}" "$RUN/cli-proxy-api" -config "$RUN/config.yaml" -local-model >"$RUN/server.log" 2>&1 </dev/null &
   echo $! >"$RUN/pid"; cd - >/dev/null
   for _ in $(seq 1 60); do
     curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && { echo "READY pid=$(st pid) port=$port evidence=$ev"; return 0; }
@@ -54,17 +59,24 @@ doctor() {
 # req <name> <curl args...> : records request line, status, headers, body under evidence/<feature>/
 req() {
   local name="$1"; shift; local d="$EVD/$name"
-  printf '%s\n' "curl $*" | sed -E 's/(Bearer |x-api-key: |X-Management-Key: )[^ "]+/\1<redacted>/g' >"$d.cmd"
+  printf '%s\n' "curl $*" | sed -E 's/(Bearer |x-api-key: |x-goog-api-key: |X-Management-Key: )[^ "]+/\1<redacted>/g' >"$d.cmd"
+  : >"$d.headers"; : >"$d.body"; chmod 600 "$d.headers" "$d.body"
   curl -sS -D "$d.headers" -o "$d.body" -w '%{http_code}' "$@" >"$d.status" || true
   echo "$name -> $(cat "$d.status")"
 }
 expect() { [ "$(cat "$EVD/$1.status")" = "$2" ] && echo "  PASS $1 status=$2" || { echo "  FAIL $1 status=$(cat "$EVD/$1.status") want=$2"; FAILS=$((FAILS+1)); }; }
 expect_body() { grep -q -- "$2" "$EVD/$1.body" && echo "  PASS $1 body~/$2/" || { echo "  FAIL $1 body lacks /$2/"; FAILS=$((FAILS+1)); }; }
 
+redact() {
+  local k m; k="$(st apikey)"; m="$(st mgmtkey)"
+  local dir; dir="$(st evidence)"
+  [ -n "$dir" ] && [ -d "$dir" ] && [ -n "$k" ] && find "$dir" -type f -exec sed -i -e "s/$k/<api-key>/g" -e "s/$m/<mgmt-key>/g" -E -e 's/(secret-key"?: *"?)[^",]+/\1<redacted>/g' {} + || true
+}
+
 drive() {
   doctor >/dev/null
   local f="${1:?feature: health|models|management|chat-completions|cli}"; local B="http://127.0.0.1:$(st port)" K; K="$(st apikey)"; local M; M="$(st mgmtkey)"
-  EVD="$(st evidence)/$f"; mkdir -p "$EVD"; FAILS=0
+  EVD="$(st evidence)/$f"; mkdir -p "$EVD"; chmod 700 "$EVD"; FAILS=0
   case "$f" in
     health)
       req healthz "$B/healthz"; expect healthz 200
@@ -74,7 +86,9 @@ drive() {
       req models-badkey -H "Authorization: Bearer wrong" "$B/v1/models"; expect models-badkey 401
       req models "$B/v1/models" -H "Authorization: Bearer $K"; expect models 200; expect_body models '"object"'
       req models-anthropic "$B/v1/models" -H "x-api-key: $K" -H "anthropic-version: 2023-06-01"; expect models-anthropic 200
-      req gemini-models "$B/v1beta/models" -H "x-goog-api-key: $K"; expect gemini-models 200 ;;
+      req gemini-models "$B/v1beta/models" -H "x-goog-api-key: $K"; expect gemini-models 200
+      expect_body models-anthropic '"data"'; expect_body models-anthropic '"has_more"'
+      expect_body gemini-models '"models"' ;;
     management)
       req mgmt-nokey "$B/v0/management/config"; expect mgmt-nokey 401
       req mgmt-config "$B/v0/management/config" -H "X-Management-Key: $M"; expect mgmt-config 200; expect_body mgmt-config '"api-keys"'
@@ -87,13 +101,12 @@ drive() {
       req chat-nocreds -X POST "$B/v1/chat/completions" -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d '{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}'
       grep -q '"error"' "$EVD/chat-nocreds.body" && [ "$(cat "$EVD/chat-nocreds.status")" -ge 400 ] && echo "  PASS chat-nocreds returns structured error ($(cat "$EVD/chat-nocreds.status"))" || { echo "  FAIL chat-nocreds"; FAILS=$((FAILS+1)); } ;;
     cli)
-      ( "$RUN/cli-proxy-api" -h ) >"$EVD/help.out" 2>&1; echo $? >"$EVD/help.exit"
+      ( "$RUN/cli-proxy-api" -h ) >"$EVD/help.out" 2>&1 && hrc=0 || hrc=$?; echo "$hrc" >"$EVD/help.exit"
       grep -q -- '-config' "$EVD/help.out" && echo "  PASS -h lists -config" || { echo "  FAIL -h"; FAILS=$((FAILS+1)); } ;;
     *) die "unknown feature $f" ;;
   esac
   tail -50 "$RUN/server.log" >"$EVD/server.log.tail"
-  # Redact this run's ephemeral keys from every evidence file.
-  find "$EVD" -type f -exec sed -i -e "s/$K/<api-key>/g" -e "s/$M/<mgmt-key>/g" {} +
+  redact
   echo "evidence: $EVD  failures: $FAILS"; [ "$FAILS" = 0 ]
 }
 
@@ -106,7 +119,13 @@ cleanup() {
 }
 
 case "${1:-}" in
-  launch) launch ;; doctor) doctor ;; drive) shift; drive "$@" ;; cleanup) cleanup ;;
-  all) shift; launch; doctor; rc=0; for f in "${@:-health models management chat-completions cli}"; do drive $f || rc=1; done; ev="$(st evidence)"; cleanup; ls "$ev" >/dev/null && exit $rc ;;
+  launch) launch ;; doctor) doctor ;; drive) shift; trap redact EXIT; drive "$@" ;; cleanup) cleanup ;;
+  all)
+    shift
+    features=("$@"); [ "$#" -gt 0 ] || features=(health models management chat-completions cli)
+    trap 'rc=$?; trap - EXIT; redact; cleanup || true; exit $rc' EXIT
+    launch; doctor; rc=0
+    for f in "${features[@]}"; do drive "$f" || rc=1; done
+    ev="$(st evidence)"; trap - EXIT; cleanup; ls "$ev" >/dev/null && exit $rc ;;
   *) echo "usage: $0 launch|doctor|drive <health|models|management|chat-completions|cli>|cleanup|all [features...]"; exit 2 ;;
 esac
